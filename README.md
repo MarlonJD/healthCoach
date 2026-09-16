@@ -27,15 +27,15 @@ docs/                      reviewed plan, generated protocol schemas, verificati
 
 The project targets iOS 26, macOS 26, and watchOS 26 and uses Swift 6 strict concurrency. Open `HealthCoach.xcodeproj` in Xcode and choose one of the shared schemes:
 
-- `HealthCoachIOS` builds the iPhone app and embeds the Watch app.
+- `HealthCoachIOS` builds the iPhone app and its canonical phone-side WatchConnectivity bridge.
 - `HealthCoachMac` builds the menu bar companion and its MCP helper build phase.
-- `HealthCoachWatch` builds the standalone watchOS companion target.
+- `HealthCoachWatch` builds the standalone watchOS companion target. Run this scheme separately when installing the optional paired Watch app; the iPhone target does not embed a legacy WatchKit Extension bundle.
 
-Set a development team and signing identities in the local Xcode configuration before installing on hardware. The checked-in project has no developer team or signing secret. The minimum deployment targets and bundle identifiers are in `HealthCoach.xcodeproj/project.pbxproj` and the three target property lists.
+Set or verify the development team and signing identities in Xcode before installing on hardware. The project may contain the locally selected team identifier, but no signing secret is committed. The minimum deployment targets and bundle identifiers are in `HealthCoach.xcodeproj/project.pbxproj` and the three target property lists.
 
 The package pins GRDB and the official MCP Swift SDK in `Package.swift` and `Package.resolved`. The Mac build packages `healthcoach-mcp` into the app's helper directory. During local development, `HEALTHCOACH_MCP_PATH` can point at an executable helper when a bundled helper is not available.
 
-The verification machine used for this source snapshot has Xcode 27.0 (SDK 27.0), while the implementation contract specifies Xcode 26.6 and 26.0 minimum deployment targets. See [`docs/VERIFICATION.md`](docs/VERIFICATION.md) for the exact build limitation and evidence.
+The verification machine used for this source snapshot has Xcode 27.0 (SDK 27.0), while the implementation contract specifies Xcode 26.6 and 26.0 minimum deployment targets. See [`docs/VERIFICATION.md`](docs/VERIFICATION.md) for the scoped build, test, simulator, and physical-device evidence.
 
 ## Build and test
 

@@ -2,19 +2,41 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleDisplayName</key><string>HealthCoach</string>
-	<key>CFBundleIdentifier</key><string>com.marlonjd.HealthCoach</string>
-	<key>CFBundleName</key><string>HealthCoach</string>
-	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleShortVersionString</key><string>1.0</string>
-	<key>CFBundleVersion</key><string>1</string>
-	<key>LSRequiresIPhoneOS</key><true/>
-	<key>NSCameraUsageDescription</key><string>HealthCoach uses the camera only to scan a short-lived Mac pairing QR code.</string>
-	<key>NSHealthShareUsageDescription</key><string>HealthCoach reads selected activity, sleep, body-mass, heart-rate, and HRV metrics to show normalized summaries.</string>
-	<key>NSLocalNetworkUsageDescription</key><string>HealthCoach connects to your paired Mac on the local network for sync and coaching jobs.</string>
-	<key>NSBonjourServices</key><array><string>_healthcoach._tcp</string></array>
-	<key>UILaunchScreen</key><dict/>
-	<key>UIRequiredDeviceCapabilities</key><array><string>arm64</string></array>
-	<key>UIBackgroundModes</key><array><string>processing</string></array>
+	<key>CFBundleDisplayName</key>
+	<string>HealthCoach</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.marlonjd.HealthCoach</string>
+	<key>CFBundleName</key>
+	<string>HealthCoach</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_healthcoach._tcp</string>
+	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>HealthCoach uses the camera only to scan a short-lived Mac pairing QR code.</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>HealthCoach reads selected activity, sleep, body-mass, heart-rate, and HRV metrics to show normalized summaries.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>HealthCoach connects to your paired Mac on the local network for sync and coaching jobs.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>processing</string>
+	</array>
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>arm64</string>
+	</array>
 </dict>
 </plist>
