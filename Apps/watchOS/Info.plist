@@ -11,5 +11,11 @@
 	<key>WKWatchKitApp</key><true/>
 	<key>WKCompanionAppBundleIdentifier</key><string>com.marlonjd.HealthCoach</string>
 	<key>WKRunsIndependentlyOfCompanionApp</key><false/>
+	<key>NSHealthShareUsageDescription</key><string>HealthCoach reads heart rate and active energy during your active strength workout.</string>
+	<key>NSHealthUpdateUsageDescription</key><string>HealthCoach saves the workout you explicitly start on Apple Watch to HealthKit.</string>
+	<key>WKBackgroundModes</key>
+	<array>
+		<string>workout-processing</string>
+	</array>
 </dict>
 </plist>

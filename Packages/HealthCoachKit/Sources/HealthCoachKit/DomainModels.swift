@@ -387,6 +387,67 @@ public enum WorkoutSessionStatus: String, Codable, Sendable {
     case deleted
 }
 
+/// The latest live workout values collected by the Apple Watch. HealthCoach
+/// stores a bounded summary rather than a raw sensor stream; HealthKit remains
+/// the source of the underlying workout samples on the Watch.
+public struct LiveWorkoutMetrics: Codable, Equatable, Sendable {
+    public var heartRateBpm: Double?
+    public var averageHeartRateBpm: Double?
+    public var peakHeartRateBpm: Double?
+    public var activeEnergyKcal: Double?
+    public var elapsedSeconds: Double?
+    public var capturedAt: Date
+
+    public init(
+        heartRateBpm: Double? = nil,
+        averageHeartRateBpm: Double? = nil,
+        peakHeartRateBpm: Double? = nil,
+        activeEnergyKcal: Double? = nil,
+        elapsedSeconds: Double? = nil,
+        capturedAt: Date = Date()
+    ) {
+        self.heartRateBpm = heartRateBpm
+        self.averageHeartRateBpm = averageHeartRateBpm
+        self.peakHeartRateBpm = peakHeartRateBpm
+        self.activeEnergyKcal = activeEnergyKcal
+        self.elapsedSeconds = elapsedSeconds
+        self.capturedAt = capturedAt
+    }
+
+    public func validate() throws {
+        if let heartRateBpm {
+            guard heartRateBpm.isFinite, heartRateBpm > 0, heartRateBpm <= 300 else {
+                throw HealthCoachError.invalidInput("Heart rate must be finite and between 0 and 300 bpm.")
+            }
+        }
+        if let averageHeartRateBpm {
+            guard averageHeartRateBpm.isFinite, averageHeartRateBpm > 0, averageHeartRateBpm <= 300 else {
+                throw HealthCoachError.invalidInput("Average heart rate is invalid.")
+            }
+        }
+        if let peakHeartRateBpm {
+            guard peakHeartRateBpm.isFinite, peakHeartRateBpm > 0, peakHeartRateBpm <= 300 else {
+                throw HealthCoachError.invalidInput("Peak heart rate is invalid.")
+            }
+        }
+        if let averageHeartRateBpm, let peakHeartRateBpm {
+            guard averageHeartRateBpm <= peakHeartRateBpm else {
+                throw HealthCoachError.invalidInput("Average heart rate cannot exceed peak heart rate.")
+            }
+        }
+        if let activeEnergyKcal {
+            guard activeEnergyKcal.isFinite, activeEnergyKcal >= 0 else {
+                throw HealthCoachError.invalidInput("Active energy must be finite and non-negative.")
+            }
+        }
+        if let elapsedSeconds {
+            guard elapsedSeconds.isFinite, elapsedSeconds >= 0 else {
+                throw HealthCoachError.invalidInput("Workout duration must be finite and non-negative.")
+            }
+        }
+    }
+}
+
 public struct WorkoutSession: Codable, Identifiable, Equatable, Sendable {
     public let id: UUID
     public var localDate: String
@@ -398,6 +459,7 @@ public struct WorkoutSession: Codable, Identifiable, Equatable, Sendable {
     public var status: WorkoutSessionStatus
     public var revision: Int
     public var setCount: Int
+    public var liveMetrics: LiveWorkoutMetrics?
     public var updatedAt: Date
 
     public init(
@@ -411,6 +473,7 @@ public struct WorkoutSession: Codable, Identifiable, Equatable, Sendable {
         status: WorkoutSessionStatus = .active,
         revision: Int = 1,
         setCount: Int = 0,
+        liveMetrics: LiveWorkoutMetrics? = nil,
         updatedAt: Date = Date()
     ) {
         self.id = id
@@ -423,6 +486,7 @@ public struct WorkoutSession: Codable, Identifiable, Equatable, Sendable {
         self.status = status
         self.revision = revision
         self.setCount = setCount
+        self.liveMetrics = liveMetrics
         self.updatedAt = updatedAt
     }
 }
@@ -1347,6 +1411,7 @@ public struct WatchCommand: Codable, Identifiable, Equatable, Sendable {
     public var reps: Int?
     public var loadKg: Double?
     public var rir: Double?
+    public var liveMetrics: LiveWorkoutMetrics?
     public var createdAt: Date
     public var status: WatchCommandStatus
     public var terminalMessage: String?
@@ -1362,6 +1427,7 @@ public struct WatchCommand: Codable, Identifiable, Equatable, Sendable {
         reps: Int? = nil,
         loadKg: Double? = nil,
         rir: Double? = nil,
+        liveMetrics: LiveWorkoutMetrics? = nil,
         createdAt: Date = Date(),
         status: WatchCommandStatus = .queued,
         terminalMessage: String? = nil
@@ -1376,6 +1442,7 @@ public struct WatchCommand: Codable, Identifiable, Equatable, Sendable {
         self.reps = reps
         self.loadKg = loadKg
         self.rir = rir
+        self.liveMetrics = liveMetrics
         self.createdAt = createdAt
         self.status = status
         self.terminalMessage = terminalMessage
@@ -1445,6 +1512,7 @@ public struct WatchWorkoutSnapshot: Codable, Equatable, Sendable {
     public var exercises: [WatchExerciseSnapshot]
     public var activeSessionID: UUID?
     public var activeSessionSetCount: Int
+    public var liveMetrics: LiveWorkoutMetrics?
     public var generatedAt: Date
 
     public init(
@@ -1457,6 +1525,7 @@ public struct WatchWorkoutSnapshot: Codable, Equatable, Sendable {
         exercises: [WatchExerciseSnapshot],
         activeSessionID: UUID?,
         activeSessionSetCount: Int,
+        liveMetrics: LiveWorkoutMetrics? = nil,
         generatedAt: Date = Date()
     ) {
         self.phoneRevision = phoneRevision
@@ -1468,6 +1537,7 @@ public struct WatchWorkoutSnapshot: Codable, Equatable, Sendable {
         self.exercises = exercises
         self.activeSessionID = activeSessionID
         self.activeSessionSetCount = activeSessionSetCount
+        self.liveMetrics = liveMetrics
         self.generatedAt = generatedAt
     }
 }

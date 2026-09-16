@@ -120,6 +120,28 @@ private struct WorkoutDetailView: View {
                 }
                 LabeledContent("Sets", value: "\(workout.setCount)")
             }
+            if let metrics = workout.liveMetrics {
+                Section("Apple Watch workout") {
+                    if let heartRate = metrics.heartRateBpm {
+                        LabeledContent("Ending heart rate", value: "\(Int(heartRate.rounded())) bpm")
+                    }
+                    if let average = metrics.averageHeartRateBpm {
+                        LabeledContent("Average heart rate", value: "\(Int(average.rounded())) bpm")
+                    }
+                    if let peak = metrics.peakHeartRateBpm {
+                        LabeledContent("Peak heart rate", value: "\(Int(peak.rounded())) bpm")
+                    }
+                    if let energy = metrics.activeEnergyKcal {
+                        LabeledContent("Active energy", value: String(format: "%.0f kcal", energy))
+                    }
+                    if let elapsed = metrics.elapsedSeconds {
+                        LabeledContent("Recorded duration", value: durationText(elapsed))
+                    }
+                    Text("Summary received from the Apple Watch HealthKit workout session.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
             Section("Logged sets") {
                 if sets.isEmpty {
                     Text("No sets logged.").foregroundStyle(.secondary)
@@ -140,6 +162,14 @@ private struct WorkoutDetailView: View {
             }
         }
         .navigationTitle("Workout")
+    }
+
+    private func durationText(_ value: Double) -> String {
+        let totalSeconds = max(Int(value.rounded()), 0)
+        let hours = totalSeconds / 3_600
+        let minutes = (totalSeconds % 3_600) / 60
+        let seconds = totalSeconds % 60
+        return hours > 0 ? String(format: "%d:%02d:%02d", hours, minutes, seconds) : String(format: "%02d:%02d", minutes, seconds)
     }
 }
 

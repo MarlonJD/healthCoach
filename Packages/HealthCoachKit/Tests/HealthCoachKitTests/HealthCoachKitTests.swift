@@ -206,17 +206,55 @@ final class HealthCoachKitTests: XCTestCase {
         XCTAssertEqual(try store.trainingSets().first?.programRevision, acceptedOld.revision)
         XCTAssertEqual(try store.trainingSets().first?.programID, acceptedOld.id)
 
-        let finish = WatchCommand(kind: .finishSession, sessionID: sessionID, sequence: 3, programID: acceptedOld.id, programRevision: acceptedOld.revision)
+        let metrics = LiveWorkoutMetrics(
+            heartRateBpm: 142,
+            averageHeartRateBpm: 132,
+            peakHeartRateBpm: 158,
+            activeEnergyKcal: 38.5,
+            elapsedSeconds: 1_800,
+            capturedAt: Date(timeIntervalSince1970: 100)
+        )
+        let finish = WatchCommand(kind: .finishSession, sessionID: sessionID, sequence: 3, programID: acceptedOld.id, programRevision: acceptedOld.revision, liveMetrics: metrics)
         XCTAssertEqual(try store.applyWatchCommand(finish).status, .applied)
         let repeatedFinish = WatchCommand(kind: .finishSession, sessionID: sessionID, sequence: 4, programID: acceptedOld.id, programRevision: acceptedOld.revision)
         XCTAssertEqual(try store.applyWatchCommand(repeatedFinish).status, .applied)
         XCTAssertEqual(try store.workouts().first?.status, .completed)
+        XCTAssertEqual(try store.workouts().first?.liveMetrics, metrics)
+
+        let invalidMetrics = WatchCommand(
+            kind: .finishSession,
+            sessionID: sessionID,
+            sequence: 5,
+            programID: acceptedOld.id,
+            programRevision: acceptedOld.revision,
+            liveMetrics: LiveWorkoutMetrics(heartRateBpm: 301)
+        )
+        XCTAssertEqual(try store.applyWatchCommand(invalidMetrics).status, .rejected)
+        XCTAssertEqual(try store.watchCommands().first(where: { $0.id == invalidMetrics.id })?.liveMetrics?.heartRateBpm, 301)
 
         let bad = WatchCommand(kind: .recordSet, sessionID: sessionID, sequence: 5, programID: acceptedOld.id, programRevision: acceptedOld.revision, exerciseID: "not_in_program", reps: 10, loadKg: 10)
         XCTAssertEqual(try store.applyWatchCommand(bad).status, .rejected)
         let persistedBad = try XCTUnwrap(try store.watchCommands().first(where: { $0.id == bad.id }))
         XCTAssertEqual(persistedBad.status, .rejected)
         XCTAssertFalse(persistedBad.terminalMessage?.isEmpty ?? true)
+    }
+
+    func testLiveWorkoutMetricsValidateAndRoundTrip() throws {
+        let valid = LiveWorkoutMetrics(
+            heartRateBpm: 120,
+            averageHeartRateBpm: 110,
+            peakHeartRateBpm: 145,
+            activeEnergyKcal: 12.25,
+            elapsedSeconds: 420,
+            capturedAt: Date(timeIntervalSince1970: 200)
+        )
+        XCTAssertNoThrow(try valid.validate())
+        let encoded = try HealthCoachJSON.encode(valid)
+        XCTAssertEqual(try HealthCoachJSON.decode(LiveWorkoutMetrics.self, from: encoded), valid)
+
+        XCTAssertThrowsError(try LiveWorkoutMetrics(averageHeartRateBpm: 160, peakHeartRateBpm: 150).validate())
+        XCTAssertThrowsError(try LiveWorkoutMetrics(heartRateBpm: 301).validate())
+        XCTAssertThrowsError(try LiveWorkoutMetrics(activeEnergyKcal: -1).validate())
     }
 
     func testHealthKitDeterministicDatesHandleCrossMidnightAndDST() throws {

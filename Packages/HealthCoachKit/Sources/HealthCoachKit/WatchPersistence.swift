@@ -43,6 +43,12 @@ public final class WatchCommandQueue: @unchecked Sendable {
         return state
     }
 
+    public func command(id: UUID) -> WatchCommand? {
+        lock.lock()
+        defer { lock.unlock() }
+        return state.commands.first(where: { $0.id == id })
+    }
+
     public func nextSequence(for sessionID: UUID) -> Int64 {
         lock.lock()
         defer { lock.unlock() }

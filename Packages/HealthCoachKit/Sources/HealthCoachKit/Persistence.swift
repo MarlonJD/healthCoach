@@ -953,6 +953,16 @@ public final class HealthCoachStore: @unchecked Sendable {
                 }
             }
             guard command.sequence > 0 else { return try rejectWatchCommand(db: db, command: command, message: "The Watch sequence is invalid.") }
+            if let liveMetrics = command.liveMetrics {
+                guard command.kind == .finishSession else {
+                    return try rejectWatchCommand(db: db, command: command, message: "Live workout metrics are only valid when finishing a session.")
+                }
+                do {
+                    try liveMetrics.validate()
+                } catch {
+                    return try rejectWatchCommand(db: db, command: command, message: error.localizedDescription)
+                }
+            }
             let lastSequence = try Int64.fetchOne(db, sql: "SELECT last_sequence FROM watch_session_sequences WHERE session_id = ?", arguments: [command.sessionID.uuidString]) ?? 0
             guard command.sequence == lastSequence + 1 else {
                 // Keep the command queued and unacknowledged. A later retry can
@@ -1016,6 +1026,7 @@ public final class HealthCoachStore: @unchecked Sendable {
                     var completed = session
                     completed.status = .completed
                     completed.endedAt = Date()
+                    completed.liveMetrics = command.liveMetrics
                     completed.revision += 1
                     completed.updatedAt = Date()
                     try putWatchPhoneRecord(db: db, session: completed)
@@ -1075,7 +1086,8 @@ public final class HealthCoachStore: @unchecked Sendable {
             dayName: day?.name,
             exercises: exercises,
             activeSessionID: session?.id,
-            activeSessionSetCount: session?.setCount ?? 0
+            activeSessionSetCount: session?.setCount ?? 0,
+            liveMetrics: session?.liveMetrics
         )
     }
 

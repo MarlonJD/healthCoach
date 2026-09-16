@@ -30,4 +30,10 @@ The user subsequently requested a modest watchOS companion. The same independent
 1. Preserve valid offline set logs against their original program/session revision even if the current program changes. Retain invalid/deleted-session command data with a visible terminal error rather than silently dropping it or retrying forever.
 2. Include idempotent session completion after preceding start/set commands have committed, so a Watch-created workout has a complete lifecycle.
 
-The accepted scope is cached workout display and start/set/finish capture through WatchConnectivity. The phone remains the canonical store and Mac/Codex bridge. No separate live HealthKit workout engine or additional backend was introduced. Physical paired-Watch transfer/background testing remains separately labeled.
+The accepted scope is cached workout display and start/set/finish capture through WatchConnectivity. The phone remains the canonical store and Mac/Codex bridge. Physical paired-Watch transfer/background testing remains separately labeled.
+
+## User-directed live workout expansion
+
+After the passed bounded Watch amendment, the user explicitly expanded the Watch scope to include a real live heart-rate and active-energy workout, while explicitly excluding wrist temperature. The implementation contract now includes a Watch-side `HKWorkoutSession` with `HKLiveWorkoutBuilder`/`HKLiveWorkoutDataSource`, HealthKit authorization, workout-processing background mode, active-workout recovery, and a bounded final summary carried by the existing durable finish command to the canonical iPhone session. It still excludes Watch AI/Mac sync, meals, complications, widgets, custom HealthKit sample writing, and any independent Watch store.
+
+This is a user-directed follow-up to the earlier independent review, not a new independent review verdict. Physical HealthKit sensor/background and paired WatchConnectivity checks remain separately labeled.

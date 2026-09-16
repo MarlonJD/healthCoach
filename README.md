@@ -13,7 +13,7 @@ The system deliberately has no application backend, cloud database, CloudKit, ac
 ```text
 Apps/iOS/                  iPhone SwiftUI app, HealthKit reader, QR scanner
 Apps/macOS/                menu bar app, pairing window, Codex worker
-Apps/watchOS/              cached workout companion and WatchConnectivity queue
+Apps/watchOS/              cached workout companion, live HealthKit workout, and WatchConnectivity queue
 Packages/HealthCoachKit/   shared Swift models, SQLite store, sync, summaries
 Packages/HealthCoachKit/Sources/HealthCoachMCP/
                            read-only MCP stdio executable
@@ -57,7 +57,7 @@ env SDKROOT=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform
   "$TOOLCHAIN/swift" build --build-tests
 ```
 
-The test suite uses synthetic fixtures only. It includes a real loopback Network.framework TLS-PSK connection, rejected credentials, bounded framing, SQLite restart/rollback/snapshot behavior, durable sync cursors/outboxes, job generations and cancellation, HealthKit date/overlap normalization, and Watch command ordering, deduplication, completion, original-program revision handling, restart, retry, and terminal-error retention. Scoped results are recorded in [`docs/VERIFICATION.md`](docs/VERIFICATION.md).
+The test suite uses synthetic fixtures only. It includes a real loopback Network.framework TLS-PSK connection, rejected credentials, bounded framing, SQLite restart/rollback/snapshot behavior, durable sync cursors/outboxes, job generations and cancellation, HealthKit date/overlap normalization, live-workout summary validation, and Watch command ordering, deduplication, completion, original-program revision handling, restart, retry, and terminal-error retention. Scoped results are recorded in [`docs/VERIFICATION.md`](docs/VERIFICATION.md).
 
 ## Local data and pairing
 
@@ -77,9 +77,11 @@ Jobs capture a consistent SQLite snapshot and prerequisite revisions before disp
 
 ## HealthKit and Watch boundaries
 
-HealthKit is read-only and optional. The iPhone imports a bounded recent range of steps, active energy, sleep, workouts, resting heart rate, HRV SDNN, body mass, and body-fat percentage. Deterministic aggregation preserves units, freshness, source identity, manual-weight precedence, sleep overlap handling, midnight/DST behavior, anchors, deleted-sample affected-day metadata, and tombstone replacements. Manual meals, measurements, goals, and training remain usable without HealthKit permission.
+The iPhone HealthKit import is read-only and optional. It imports a bounded recent range of steps, active energy, sleep, workouts, resting heart rate, HRV SDNN, body mass, and body-fat percentage. Deterministic aggregation preserves units, freshness, source identity, manual-weight precedence, sleep overlap handling, midnight/DST behavior, anchors, deleted-sample affected-day metadata, and tombstone replacements. Manual meals, measurements, goals, and training remain usable without iPhone HealthKit permission.
 
-The Watch receives replaceable workout snapshots with `updateApplicationContext` and sends ordered `startSession`, `recordSet`, and `finishSession` commands and acknowledgments with `transferUserInfo`. Commands are persisted on Watch before they appear saved, and the phone validates, deduplicates, applies, and enqueues its existing Mac outbox transactionally before acknowledging. Valid offline sets remain tied to their original session/program revision even after a newer program is accepted. Invalid or deleted references retain their entered values and visible terminal error. There is no Watch AI or Mac connection, independent Watch sync, meals, complications, widgets, live HR/energy workout engine, or Watch-side HealthKit writer in this scope.
+The Watch receives replaceable workout snapshots with `updateApplicationContext` and sends ordered `startSession`, `recordSet`, and `finishSession` commands and acknowledgments with `transferUserInfo`. A user-started Watch workout uses the real HealthKit workout session APIs to display current/average/peak heart rate, active energy, and elapsed time; the system saves the workout to HealthKit, while HealthCoach stores only the bounded final summary in the canonical phone session. Commands are persisted on Watch before they appear saved, and the phone validates, deduplicates, applies, and enqueues its existing Mac outbox transactionally before acknowledging. Valid offline sets remain tied to their original session/program revision even after a newer program is accepted. Invalid or deleted references retain their entered values and visible terminal error. Wrist temperature is not collected. There is no Watch AI or Mac connection, independent Watch sync, meals, complications, widgets, custom HealthKit sample writer, or independent workout database.
+
+The Watch declares HealthKit permission text and `WKBackgroundModes = workout-processing`; the recovery delegate reconnects an active HealthKit session after an interruption. Physical Watch hardware is required to verify authorization, sensor values, background recovery, and queued `transferUserInfo` delivery.
 
 ## Further documentation
 

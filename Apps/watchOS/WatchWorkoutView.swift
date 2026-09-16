@@ -32,12 +32,24 @@ struct WatchWorkoutView: View {
                         if let next = model.nextExercise {
                             Text("Next: \(next.displayName)").font(.caption).foregroundStyle(.secondary)
                         }
-                        HStack {
-                            if snapshot.activeSessionID == nil {
-                                Button("Start") { model.startSession() }.buttonStyle(.borderedProminent)
-                            } else {
-                                Button("Finish") { model.finishSession() }.buttonStyle(.bordered)
-                            }
+                        if snapshot.activeSessionID == nil && (model.liveStatus == .idle || isLiveError) {
+                            Button("Start") { model.startSession() }.buttonStyle(.borderedProminent)
+                        } else if model.liveStatus == .running || model.liveStatus == .paused {
+                            Button("Finish") { model.finishSession() }.buttonStyle(.bordered)
+                        } else if case .error = model.liveStatus {
+                            Text("Workout could not continue. Retry the visible command or start again after resolving the error.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else if snapshot.activeSessionID != nil && !model.liveStatus.isActive {
+                            Text("This session is active on the iPhone. Waiting for Watch workout recovery.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else if model.liveStatus.isActive {
+                            ProgressView(model.liveStatus.title)
+                                .font(.caption)
+                        }
+                        if model.liveStatus.isActive || model.liveMetrics != nil {
+                            LiveWorkoutMetricsView(model: model)
                         }
                     } else {
                         ContentUnavailableView("Open HealthCoach on iPhone", systemImage: "iphone", description: Text("The Watch uses a cached accepted workout and never connects to the Mac directly."))
@@ -83,6 +95,66 @@ struct WatchWorkoutView: View {
         case .error: return .red
         case .unavailable: return .secondary
         }
+    }
+
+    private var isLiveError: Bool {
+        if case .error = model.liveStatus { return true }
+        return false
+    }
+}
+
+private struct LiveWorkoutMetricsView: View {
+    @ObservedObject var model: WatchAppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Image(systemName: "heart.fill").foregroundStyle(.red)
+                Text(model.liveStatus.title).font(.subheadline.bold())
+            }
+            HStack(spacing: 8) {
+                metric(title: "HR", value: heartRate(model.liveMetrics?.heartRateBpm))
+                metric(title: "Energy", value: energy(model.liveMetrics?.activeEnergyKcal))
+            }
+            HStack(spacing: 8) {
+                metric(title: "Avg", value: heartRate(model.liveMetrics?.averageHeartRateBpm))
+                metric(title: "Peak", value: heartRate(model.liveMetrics?.peakHeartRateBpm))
+            }
+            if let elapsed = model.liveMetrics?.elapsedSeconds {
+                Text("Elapsed \(duration(elapsed))").font(.caption2).foregroundStyle(.secondary)
+            }
+            Text("Live values come from this Watch's HealthKit workout session.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(8)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func metric(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.caption2).foregroundStyle(.secondary)
+            Text(value).font(.headline.monospacedDigit())
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func heartRate(_ value: Double?) -> String {
+        guard let value else { return "—" }
+        return "\(Int(value.rounded())) bpm"
+    }
+
+    private func energy(_ value: Double?) -> String {
+        guard let value else { return "—" }
+        return "\(Int(value.rounded())) kcal"
+    }
+
+    private func duration(_ value: Double) -> String {
+        let totalSeconds = max(Int(value.rounded()), 0)
+        let hours = totalSeconds / 3_600
+        let minutes = (totalSeconds % 3_600) / 60
+        let seconds = totalSeconds % 60
+        return hours > 0 ? String(format: "%d:%02d:%02d", hours, minutes, seconds) : String(format: "%02d:%02d", minutes, seconds)
     }
 }
 

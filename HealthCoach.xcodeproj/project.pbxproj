@@ -19,6 +19,7 @@
 		A70100000000000000000007 /* ServiceManagement.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A72000000000000000000007 /* ServiceManagement.framework */; };
 		A70100000000000000000008 /* WatchKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A72000000000000000000008 /* WatchKit.framework */; };
 		A70100000000000000000009 /* WatchConnectivity.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A72000000000000000000009 /* WatchConnectivity.framework */; };
+		A7010000000000000000000A /* HealthKit.framework in Watch Frameworks */ = {isa = PBXBuildFile; fileRef = A72000000000000000000002 /* HealthKit.framework */; };
 		A70200000000000000000001 /* HealthCoachApp.swift */ = {isa = PBXBuildFile; fileRef = A73000000000000000000001 /* HealthCoachApp.swift */; };
 		A70200000000000000000002 /* iOSAppModel.swift */ = {isa = PBXBuildFile; fileRef = A73000000000000000000002 /* iOSAppModel.swift */; };
 		A70200000000000000000003 /* PhoneSyncService.swift */ = {isa = PBXBuildFile; fileRef = A73000000000000000000003 /* PhoneSyncService.swift */; };
@@ -35,6 +36,8 @@
 		A70400000000000000000002 /* WatchConnectivityBridge.swift */ = {isa = PBXBuildFile; fileRef = A73000000000000000000022 /* WatchConnectivityBridge.swift */; };
 		A70400000000000000000003 /* WatchAppModel.swift */ = {isa = PBXBuildFile; fileRef = A73000000000000000000023 /* WatchAppModel.swift */; };
 		A70400000000000000000004 /* WatchWorkoutView.swift */ = {isa = PBXBuildFile; fileRef = A73000000000000000000024 /* WatchWorkoutView.swift */; };
+		A70400000000000000000005 /* WatchWorkoutSessionController.swift */ = {isa = PBXBuildFile; fileRef = A73000000000000000000025 /* WatchWorkoutSessionController.swift */; };
+		A70400000000000000000006 /* WatchApplicationDelegate.swift */ = {isa = PBXBuildFile; fileRef = A73000000000000000000026 /* WatchApplicationDelegate.swift */; };
 		A70500000000000000000001 /* iOS Info.plist */ = {isa = PBXBuildFile; fileRef = A74000000000000000000001 /* iOS Info.plist */; };
 		A70500000000000000000002 /* macOS Info.plist */ = {isa = PBXBuildFile; fileRef = A74000000000000000000002 /* macOS Info.plist */; };
 		A70500000000000000000003 /* watchOS Info.plist */ = {isa = PBXBuildFile; fileRef = A74000000000000000000003 /* watchOS Info.plist */; };
@@ -61,10 +64,13 @@
 		A73000000000000000000022 /* WatchConnectivityBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchConnectivityBridge.swift; sourceTree = "<group>"; };
 		A73000000000000000000023 /* WatchAppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchAppModel.swift; sourceTree = "<group>"; };
 		A73000000000000000000024 /* WatchWorkoutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchWorkoutView.swift; sourceTree = "<group>"; };
+		A73000000000000000000025 /* WatchWorkoutSessionController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchWorkoutSessionController.swift; sourceTree = "<group>"; };
+		A73000000000000000000026 /* WatchApplicationDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchApplicationDelegate.swift; sourceTree = "<group>"; };
 		A74000000000000000000001 /* iOS Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A74000000000000000000002 /* macOS Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A74000000000000000000003 /* watchOS Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A74100000000000000000001 /* HealthCoach.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = HealthCoach.entitlements; sourceTree = "<group>"; };
+		A74100000000000000000002 /* HealthCoachWatch.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = HealthCoachWatch.entitlements; sourceTree = "<group>"; };
 		A72000000000000000000001 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
 		A72000000000000000000002 /* HealthKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = HealthKit.framework; path = System/Library/Frameworks/HealthKit.framework; sourceTree = SDKROOT; };
 		A72000000000000000000003 /* Network.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Network.framework; path = System/Library/Frameworks/Network.framework; sourceTree = SDKROOT; };
@@ -79,7 +85,7 @@
 /* Begin PBXFrameworksBuildPhase section */
 		A40000000000000000000001 /* iOS Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (A70000000000000000000001, A70100000000000000000001, A70100000000000000000002, A70100000000000000000003, A70100000000000000000004,); runOnlyForDeploymentPostprocessing = 0; };
 		A40000000000000000000002 /* macOS Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (A70000000000000000000002, A70100000000000000000005, A70100000000000000000006, A70100000000000000000007, A70100000000000000000003,); runOnlyForDeploymentPostprocessing = 0; };
-		A40000000000000000000003 /* watchOS Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (A70000000000000000000003, A70100000000000000000008, A70100000000000000000009,); runOnlyForDeploymentPostprocessing = 0; };
+		A40000000000000000000003 /* watchOS Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (A70000000000000000000003, A70100000000000000000008, A70100000000000000000009, A7010000000000000000000A,); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -87,7 +93,7 @@
 		A00200000000000000000001 /* Products */ = {isa = PBXGroup; children = (A10000000000000000000001, A10000000000000000000002, A10000000000000000000003,); name = Products; sourceTree = "<group>"; };
 		A01000000000000000000001 /* iOS */ = {isa = PBXGroup; children = (A73000000000000000000001, A73000000000000000000002, A73000000000000000000003, A73000000000000000000004, A73000000000000000000005, A73000000000000000000006, A73000000000000000000007, A73000000000000000000008, A73000000000000000000009, A74000000000000000000001, A74100000000000000000001,); path = iOS; sourceTree = "<group>"; };
 		A01100000000000000000001 /* macOS */ = {isa = PBXGroup; children = (A73000000000000000000011, A73000000000000000000012, A73000000000000000000013, A74000000000000000000002,); path = macOS; sourceTree = "<group>"; };
-		A01200000000000000000001 /* watchOS */ = {isa = PBXGroup; children = (A73000000000000000000021, A73000000000000000000022, A73000000000000000000023, A73000000000000000000024, A74000000000000000000003,); path = watchOS; sourceTree = "<group>"; };
+		A01200000000000000000001 /* watchOS */ = {isa = PBXGroup; children = (A73000000000000000000021, A73000000000000000000022, A73000000000000000000023, A73000000000000000000024, A73000000000000000000025, A73000000000000000000026, A74000000000000000000003, A74100000000000000000002,); path = watchOS; sourceTree = "<group>"; };
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -99,7 +105,7 @@
 /* Begin PBXProject section */
 		A00000000000000000000001 /* Project object */ = {
 			isa = PBXProject;
-			attributes = { LastUpgradeCheck = 2660; ORGANIZATIONNAME = MarlonJD; TargetAttributes = { A20000000000000000000001 = { CreatedOnToolsVersion = 26.6; SystemCapabilities = { com.apple.HealthKit = { enabled = 1; }; }; }; A20000000000000000000002 = { CreatedOnToolsVersion = 26.6; }; A20000000000000000000003 = { CreatedOnToolsVersion = 26.6; }; };
+			attributes = { LastUpgradeCheck = 2660; ORGANIZATIONNAME = MarlonJD; TargetAttributes = { A20000000000000000000001 = { CreatedOnToolsVersion = 26.6; SystemCapabilities = { com.apple.HealthKit = { enabled = 1; }; }; }; A20000000000000000000002 = { CreatedOnToolsVersion = 26.6; }; A20000000000000000000003 = { CreatedOnToolsVersion = 26.6; SystemCapabilities = { com.apple.HealthKit = { enabled = 1; }; }; }; };
 			};
 			buildConfigurationList = A31000000000000000000001;
 			compatibilityVersion = "Xcode 16.0";
@@ -140,7 +146,7 @@
 /* Begin PBXSourcesBuildPhase section */
 		A50000000000000000000001 /* iOS Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A70200000000000000000001, A70200000000000000000002, A70200000000000000000003, A70200000000000000000004, A70200000000000000000005, A70200000000000000000006, A70200000000000000000007, A70200000000000000000008, A70200000000000000000009,); runOnlyForDeploymentPostprocessing = 0; };
 		A50000000000000000000002 /* macOS Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A70300000000000000000001, A70300000000000000000002, A70300000000000000000003,); runOnlyForDeploymentPostprocessing = 0; };
-		A50000000000000000000003 /* watchOS Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A70400000000000000000001, A70400000000000000000002, A70400000000000000000003, A70400000000000000000004,); runOnlyForDeploymentPostprocessing = 0; };
+		A50000000000000000000003 /* watchOS Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A70400000000000000000001, A70400000000000000000002, A70400000000000000000003, A70400000000000000000004, A70400000000000000000005, A70400000000000000000006,); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
@@ -150,8 +156,8 @@
 		A32100000000000000000002 /* iOS Release */ = {isa = XCBuildConfiguration; buildSettings = { CODE_SIGNING_ALLOWED = YES; CODE_SIGN_STYLE = Automatic; DEVELOPMENT_TEAM = ""; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Apps/iOS/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 26.0; PRODUCT_BUNDLE_IDENTIFIER = com.marlonjd.HealthCoach; PRODUCT_NAME = HealthCoach; SDKROOT = iphoneos; SWIFT_EMIT_LOC_STRINGS = NO; SWIFT_STRICT_CONCURRENCY = complete; TARGETED_DEVICE_FAMILY = 1; }; name = Release; };
 		A32100000000000000000003 /* macOS Debug */ = {isa = XCBuildConfiguration; buildSettings = { CODE_SIGNING_ALLOWED = YES; CODE_SIGN_STYLE = Automatic; DEVELOPMENT_TEAM = ""; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Apps/macOS/Info.plist; MACOSX_DEPLOYMENT_TARGET = 26.0; PRODUCT_BUNDLE_IDENTIFIER = com.marlonjd.HealthCoach.Mac; PRODUCT_NAME = HealthCoachMac; SDKROOT = macosx; SWIFT_EMIT_LOC_STRINGS = NO; SWIFT_STRICT_CONCURRENCY = complete; }; name = Debug; };
 		A32100000000000000000004 /* macOS Release */ = {isa = XCBuildConfiguration; buildSettings = { CODE_SIGNING_ALLOWED = YES; CODE_SIGN_STYLE = Automatic; DEVELOPMENT_TEAM = ""; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Apps/macOS/Info.plist; MACOSX_DEPLOYMENT_TARGET = 26.0; PRODUCT_BUNDLE_IDENTIFIER = com.marlonjd.HealthCoach.Mac; PRODUCT_NAME = HealthCoachMac; SDKROOT = macosx; SWIFT_EMIT_LOC_STRINGS = NO; SWIFT_STRICT_CONCURRENCY = complete; }; name = Release; };
-		A32100000000000000000005 /* watchOS Debug */ = {isa = XCBuildConfiguration; buildSettings = { CODE_SIGNING_ALLOWED = YES; CODE_SIGN_STYLE = Automatic; DEVELOPMENT_TEAM = ""; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Apps/watchOS/Info.plist; PRODUCT_BUNDLE_IDENTIFIER = com.marlonjd.HealthCoach.watchkitapp; PRODUCT_NAME = HealthCoachWatch; SDKROOT = watchos; SWIFT_EMIT_LOC_STRINGS = NO; SWIFT_STRICT_CONCURRENCY = complete; TARGETED_DEVICE_FAMILY = 4; WATCHOS_DEPLOYMENT_TARGET = 26.0; }; name = Debug; };
-		A32100000000000000000006 /* watchOS Release */ = {isa = XCBuildConfiguration; buildSettings = { CODE_SIGNING_ALLOWED = YES; CODE_SIGN_STYLE = Automatic; DEVELOPMENT_TEAM = ""; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Apps/watchOS/Info.plist; PRODUCT_BUNDLE_IDENTIFIER = com.marlonjd.HealthCoach.watchkitapp; PRODUCT_NAME = HealthCoachWatch; SDKROOT = watchos; SWIFT_EMIT_LOC_STRINGS = NO; SWIFT_STRICT_CONCURRENCY = complete; TARGETED_DEVICE_FAMILY = 4; WATCHOS_DEPLOYMENT_TARGET = 26.0; }; name = Release; };
+		A32100000000000000000005 /* watchOS Debug */ = {isa = XCBuildConfiguration; buildSettings = { CODE_SIGNING_ALLOWED = YES; CODE_SIGN_STYLE = Automatic; CODE_SIGN_ENTITLEMENTS = Apps/watchOS/HealthCoachWatch.entitlements; DEVELOPMENT_TEAM = ""; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Apps/watchOS/Info.plist; PRODUCT_BUNDLE_IDENTIFIER = com.marlonjd.HealthCoach.watchkitapp; PRODUCT_NAME = HealthCoachWatch; SDKROOT = watchos; SWIFT_EMIT_LOC_STRINGS = NO; SWIFT_STRICT_CONCURRENCY = complete; TARGETED_DEVICE_FAMILY = 4; WATCHOS_DEPLOYMENT_TARGET = 26.0; }; name = Debug; };
+		A32100000000000000000006 /* watchOS Release */ = {isa = XCBuildConfiguration; buildSettings = { CODE_SIGNING_ALLOWED = YES; CODE_SIGN_STYLE = Automatic; CODE_SIGN_ENTITLEMENTS = Apps/watchOS/HealthCoachWatch.entitlements; DEVELOPMENT_TEAM = ""; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Apps/watchOS/Info.plist; PRODUCT_BUNDLE_IDENTIFIER = com.marlonjd.HealthCoach.watchkitapp; PRODUCT_NAME = HealthCoachWatch; SDKROOT = watchos; SWIFT_EMIT_LOC_STRINGS = NO; SWIFT_STRICT_CONCURRENCY = complete; TARGETED_DEVICE_FAMILY = 4; WATCHOS_DEPLOYMENT_TARGET = 26.0; }; name = Release; };
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
