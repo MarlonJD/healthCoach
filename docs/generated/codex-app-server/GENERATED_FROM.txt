@@ -1,0 +1,2 @@
+codex-cli 0.154.0-alpha.6.2
+d71ddf3bf5484f8de2799f7a4793c2e66808a9ec1a330e2307accb088ab5948a

@@ -1,0 +1,13 @@
+.DS_Store
+.build/
+DerivedData/
+build/
+*.xcuserstate
+*.xcscmblueprint
+*.db
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.healthcoach-snapshot
+xcuserdata/
+.codex-local/

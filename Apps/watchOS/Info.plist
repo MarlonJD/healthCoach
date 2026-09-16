@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key><string>HealthCoach</string>
+	<key>CFBundleIdentifier</key><string>com.marlonjd.HealthCoach.watchkitapp</string>
+	<key>CFBundleName</key><string>HealthCoach</string>
+	<key>CFBundlePackageType</key><string>APPL</string>
+	<key>CFBundleShortVersionString</key><string>1.0</string>
+	<key>CFBundleVersion</key><string>1</string>
+	<key>WKWatchKitApp</key><true/>
+	<key>WKCompanionAppBundleIdentifier</key><string>com.marlonjd.HealthCoach</string>
+	<key>WKRunsIndependentlyOfCompanionApp</key><false/>
+</dict>
+</plist>
