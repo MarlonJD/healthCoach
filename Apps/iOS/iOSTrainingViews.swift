@@ -52,6 +52,10 @@ struct TrainingView: View {
             }
         }
         .navigationTitle("Training")
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(HealthCoachPalette.canvas)
+        .tint(HealthCoachPalette.indigo)
         .sheet(item: $selectedExercise) { exercise in
             SetEntrySheet(exercise: exercise, model: model)
         }
@@ -162,6 +166,10 @@ private struct WorkoutDetailView: View {
             }
         }
         .navigationTitle("Workout")
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(HealthCoachPalette.canvas)
+        .tint(HealthCoachPalette.indigo)
     }
 
     private func durationText(_ value: Double) -> String {
@@ -192,6 +200,9 @@ private struct SetEntrySheet: View {
                 }
             }
             .navigationTitle("Log set")
+            .scrollContentBackground(.hidden)
+            .background(HealthCoachPalette.canvas)
+            .tint(HealthCoachPalette.indigo)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {

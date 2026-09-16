@@ -100,15 +100,24 @@ final class iOSAppModel: ObservableObject {
     }
 
     var today: String {
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar.current
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: Date())
+        localDate(for: Date())
     }
 
     var todayNutrition: DailyNutritionSummary {
         DeterministicSummaries.nutrition(for: today, meals: meals)
+    }
+
+    var todayHealthSummary: HealthSummary? {
+        healthSummaries.first(where: { $0.localDate == today })
+    }
+
+    /// HealthKit is the automatic source shown on Today. A manual weight is
+    /// only a fallback when no imported HealthKit weight exists at all.
+    var currentWeightMeasurement: HealthCoachKit.Measurement? {
+        let weights = measurements
+            .filter { $0.kind == .weight && $0.deletedAt == nil }
+            .sorted { $0.measuredAt > $1.measuredAt }
+        return weights.first(where: { $0.source == .healthKit }) ?? weights.first
     }
 
     var weightTrend: WeightTrend {
@@ -255,11 +264,19 @@ final class iOSAppModel: ObservableObject {
         } catch { lastError = error.localizedDescription }
     }
 
-    func saveMeasurement(kind: MeasurementKind, value: Double) {
+    func saveMeasurement(kind: MeasurementKind, value: Double, measuredAt: Date = Date()) {
         guard let store, value.isFinite, value >= 0 else { return }
         let unit: String = kind == .waist ? "cm" : kind == .bodyFat ? "percent" : "kg"
         do {
-            try store.saveMeasurement(Measurement(kind: kind, value: value, unit: unit, localDate: today))
+            try store.saveMeasurement(Measurement(kind: kind, value: value, unit: unit, measuredAt: measuredAt, localDate: localDate(for: measuredAt)))
+            refresh()
+        } catch { lastError = error.localizedDescription }
+    }
+
+    func deleteMeasurement(_ measurement: HealthCoachKit.Measurement) {
+        guard measurement.source == .manual else { return }
+        do {
+            try store?.deleteMeasurement(id: measurement.id)
             refresh()
         } catch { lastError = error.localizedDescription }
     }
@@ -512,5 +529,13 @@ final class iOSAppModel: ObservableObject {
     private func publishWatchSnapshot() {
         guard let store, let snapshot = try? store.latestWatchSnapshot() else { return }
         watchBridge?.send(snapshot: snapshot)
+    }
+
+    private func localDate(for date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar.current
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
     }
 }

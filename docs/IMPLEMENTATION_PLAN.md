@@ -152,11 +152,11 @@ Daily data carries the day interval and aggregation time zone. Define 7-day weig
 
 ### iPhone
 
-- **Today:** quick meal/weight/waist capture, deterministic daily totals and 7-day weight trend, HealthKit summaries, sync status and pending count.
+- **Today:** quick meal capture, automatic HealthKit weight when available, deterministic daily totals and 7-day weight trend, HealthKit summaries, sync status, and pending count. Daily body-measurement fields are intentionally absent.
 - **Meals:** text capture, history, pending/error states, estimated result with range/assumptions, and correction editing.
 - **Training:** current accepted program, cached alternatives, session/set logger, history, equipment settings, new-program and progression requests. Logging works offline.
 - **Coach:** question entry, queued questions, received answers/proposals, accept a proposed program.
-- **Settings:** profile/goals/preferences, HealthKit access, pairing/unpair, Codex-analysis disclosure/control, sync now.
+- **Settings:** profile/goals/preferences, occasional Body measurements check-ins, HealthKit access, pairing/unpair, Codex-analysis disclosure/control, sync now.
 
 Use native forms, lists, sheets, accessible labels, Dynamic Type, and clear empty/error states. A custom design system, onboarding wizard, gamification, social features, and notifications are unnecessary for this version.
 

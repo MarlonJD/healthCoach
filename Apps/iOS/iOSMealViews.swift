@@ -43,6 +43,10 @@ struct MealsView: View {
             }
         }
         .navigationTitle("Meals")
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(HealthCoachPalette.canvas)
+        .tint(HealthCoachPalette.indigo)
     }
 
     private func mealStatus(_ meal: Meal) -> String {
@@ -110,6 +114,9 @@ struct MealDetailView: View {
             }
         }
         .navigationTitle("Meal")
+        .scrollContentBackground(.hidden)
+        .background(HealthCoachPalette.canvas)
+        .tint(HealthCoachPalette.indigo)
         .sheet(isPresented: $showingCorrection) {
             NavigationStack {
                 Form {
