@@ -14,6 +14,7 @@ enum HealthCoachPalette {
     static let mint = Color(red: 0.16, green: 0.64, blue: 0.48)
     static let orange = Color(red: 0.92, green: 0.47, blue: 0.18)
     static let coral = Color(red: 0.88, green: 0.30, blue: 0.34)
+    static let deepIndigo = Color(red: 0.16, green: 0.18, blue: 0.55)
 }
 
 struct iOSRootView: View {
@@ -66,7 +67,7 @@ struct HealthCoachCard<Content: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        let card = VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
                     if let eyebrow {
@@ -92,12 +93,25 @@ struct HealthCoachCard<Content: View>: View {
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(HealthCoachPalette.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .stroke(HealthCoachPalette.line, lineWidth: 1)
+
+        return styledCard(card)
+    }
+
+    @ViewBuilder
+    private func styledCard<StyledContent: View>(_ content: StyledContent) -> some View {
+        if #available(iOS 26.0, *) {
+            content
+                .glassEffect(.regular.tint(tint.opacity(0.08)), in: .rect(cornerRadius: 26))
+                .shadow(color: .black.opacity(0.035), radius: 14, y: 7)
+        } else {
+            content
+                .background(HealthCoachPalette.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 26, style: .continuous)
+                        .stroke(HealthCoachPalette.line, lineWidth: 1)
+                }
+                .shadow(color: .black.opacity(0.045), radius: 18, y: 8)
         }
-        .shadow(color: .black.opacity(0.045), radius: 18, y: 8)
     }
 }
 
@@ -129,23 +143,35 @@ struct TodayView: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 16) {
-                header
-                quickCaptureCard
-                bodySnapshotCard
-                nutritionCard
-                healthCard
-                trainingCard
-                connectionsCard
+            if #available(iOS 26.0, *) {
+                GlassEffectContainer(spacing: 16) {
+                    dashboardContent
+                }
+            } else {
+                dashboardContent
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 12)
-            .padding(.bottom, 32)
         }
         .scrollIndicators(.hidden)
         .background(HealthCoachPalette.canvas.ignoresSafeArea())
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    @ViewBuilder
+    private var dashboardContent: some View {
+        LazyVStack(alignment: .leading, spacing: 16) {
+            header
+            dailyPulseCard
+            quickCaptureCard
+            bodySnapshotCard
+            nutritionCard
+            healthCard
+            trainingCard
+            connectionsCard
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
+        .padding(.bottom, 32)
     }
 
     private var header: some View {
@@ -170,6 +196,81 @@ struct TodayView: View {
         }
         .padding(.top, 8)
         .padding(.bottom, 4)
+    }
+
+    private var dailyPulseCard: some View {
+        VStack(alignment: .leading, spacing: 17) {
+            HStack(alignment: .center, spacing: 10) {
+                Image(systemName: "sparkles")
+                    .font(.subheadline.weight(.bold))
+                    .frame(width: 30, height: 30)
+                    .background(.white.opacity(0.16), in: Circle())
+                Text("YOUR DAY AT A GLANCE")
+                    .font(.caption.weight(.bold))
+                    .tracking(1.1)
+                    .foregroundStyle(.white.opacity(0.78))
+                Spacer()
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(pulseTitle)
+                    .font(.title2.weight(.bold))
+                Text(pulseSubtitle)
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.78))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 8) {
+                PulseMetric(value: "\(model.todayNutrition.mealCount)", label: "meals")
+                PulseMetric(value: "\(model.todayWorkoutSetCount)", label: "sets")
+                PulseMetric(value: syncLabel, label: "sync")
+            }
+
+            HStack(spacing: 10) {
+                if model.activeSession != nil {
+                    NavigationLink("Continue workout") {
+                        TrainingView(model: model)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.white)
+                } else if model.displayedTrainingProgram != nil {
+                    Button("Start workout") { model.startWorkout() }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.white)
+                } else {
+                    NavigationLink("Open training") {
+                        TrainingView(model: model)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.white)
+                }
+
+                NavigationLink {
+                    CoachView(model: model)
+                } label: {
+                    Label("Ask Coach", systemImage: "bubble.left")
+                        .font(.footnote.weight(.semibold))
+                }
+                .foregroundStyle(.white)
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            LinearGradient(
+                colors: [HealthCoachPalette.deepIndigo, HealthCoachPalette.indigo, HealthCoachPalette.cyan.opacity(0.92)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .stroke(.white.opacity(0.20), lineWidth: 1)
+        }
+        .shadow(color: HealthCoachPalette.indigo.opacity(0.24), radius: 18, y: 9)
     }
 
     private var quickCaptureCard: some View {
@@ -407,6 +508,35 @@ struct TodayView: View {
         }
     }
 
+    private var pulseTitle: String {
+        if model.activeSession != nil { return "Workout in progress" }
+        if model.todayNutrition.mealCount == 0 { return "Make your first check-in" }
+        if model.displayedTrainingProgram != nil { return "Your plan is ready" }
+        return "Keep your momentum"
+    }
+
+    private var pulseSubtitle: String {
+        if let session = model.activeSession {
+            return "\(session.setCount) sets logged. Continue from the saved session whenever you are ready."
+        }
+        if model.todayNutrition.mealCount == 0 {
+            return "Log a meal in seconds. It stays on this iPhone until the paired Mac can analyze it."
+        }
+        if model.displayedTrainingProgram != nil {
+            return "Your accepted training plan is cached and ready for the next session."
+        }
+        return "HealthCoach keeps your day organized while your local data stays under your control."
+    }
+
+    private var syncLabel: String {
+        switch model.syncStatus {
+        case .synced: return "OK"
+        case .syncing, .pairing: return "…"
+        case .failed: return "!"
+        case .unpaired, .disconnected: return "—"
+        }
+    }
+
     private var greeting: String {
         let hour = Calendar.current.component(.hour, from: Date())
         let timeGreeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening"
@@ -438,7 +568,28 @@ struct TodayView: View {
     private func targetDeltaText(current: Double, target: Double) -> String {
         let difference = abs(target - current)
         if difference < 0.05 { return "On target" }
-        return String(format: "%.1f kg to go", difference)
+        let direction = current > target ? "to lose" : "to gain"
+        return String(format: "%.1f kg %@", difference, direction)
+    }
+}
+
+private struct PulseMetric: View {
+    let value: String
+    let label: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(value)
+                .font(.headline.weight(.bold))
+                .monospacedDigit()
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.70))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
     }
 }
 

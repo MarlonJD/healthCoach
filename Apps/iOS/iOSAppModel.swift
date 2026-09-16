@@ -111,6 +111,12 @@ final class iOSAppModel: ObservableObject {
         healthSummaries.first(where: { $0.localDate == today })
     }
 
+    var todayWorkoutSetCount: Int {
+        workouts
+            .filter { $0.localDate == today }
+            .reduce(0) { $0 + $1.setCount }
+    }
+
     /// HealthKit is the automatic source shown on Today. A manual weight is
     /// only a fallback when no imported HealthKit weight exists at all.
     var currentWeightMeasurement: HealthCoachKit.Measurement? {

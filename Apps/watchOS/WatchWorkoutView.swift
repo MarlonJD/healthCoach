@@ -1,6 +1,12 @@
 import SwiftUI
 import HealthCoachKit
 
+private enum WatchPalette {
+    static let accent = Color(red: 0.30, green: 0.52, blue: 0.95)
+    static let energy = Color.orange
+    static let success = Color.green
+}
+
 struct WatchWorkoutView: View {
     @ObservedObject var model: WatchAppModel
 
@@ -8,34 +14,93 @@ struct WatchWorkoutView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Image(systemName: statusIcon).foregroundStyle(statusColor)
-                        Text(model.status.title).font(.caption)
+                    HStack(spacing: 8) {
+                        Image(systemName: statusIcon)
+                            .foregroundStyle(statusColor)
+                        Text(model.status.title)
+                            .font(.caption.weight(.semibold))
+                        Spacer(minLength: 0)
                     }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(statusColor.opacity(0.14), in: Capsule())
                     if let snapshot = model.snapshot {
-                        Text(snapshot.programName ?? "Workout").font(.headline)
-                        Text(snapshot.dayName ?? snapshot.localDate).font(.caption).foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(snapshot.programName ?? "Workout")
+                                .font(.title3.weight(.bold))
+                            Text(snapshot.dayName ?? snapshot.localDate)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                         if let current = model.currentExercise {
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text("Current").font(.caption).foregroundStyle(.secondary)
-                                Text(current.displayName).font(.headline)
-                                Text("Set \(model.currentExerciseSetNumber) of \(current.sets) · \(current.minimumReps)–\(current.maximumReps) reps")
-                                if let rir = current.targetRIR { Text("Target RIR \(String(format: "%.1f", rir))").font(.caption) }
-                                Button("Log set") { model.showingSetEntry = true }
+                            VStack(alignment: .leading, spacing: 9) {
+                                HStack(alignment: .top, spacing: 8) {
+                                    Image(systemName: "figure.strengthtraining.traditional")
+                                        .font(.headline)
+                                        .foregroundStyle(WatchPalette.accent)
+                                        .frame(width: 28, height: 28)
+                                        .background(WatchPalette.accent.opacity(0.14), in: Circle())
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Current exercise")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                        Text(current.displayName)
+                                            .font(.headline.weight(.bold))
+                                            .lineLimit(2)
+                                    }
+                                }
+                                Text("Set \(model.currentExerciseSetNumber) of \(max(current.sets, 1)) · \(current.minimumReps)–\(current.maximumReps) reps")
+                                    .font(.subheadline.weight(.semibold))
+                                ProgressView(
+                                    value: Double(max(model.currentExerciseSetNumber - 1, 0)),
+                                    total: Double(max(current.sets, 1))
+                                )
+                                .tint(WatchPalette.success)
+                                if let rir = current.targetRIR {
+                                    Text("Target RIR \(String(format: "%.1f", rir))")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Button {
+                                    model.showingSetEntry = true
+                                } label: {
+                                    Label("Log set", systemImage: "plus")
+                                }
                                     .buttonStyle(.borderedProminent)
                             }
-                            .padding(8)
+                            .padding(12)
                             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
                         } else {
                             Text("No exercises cached for this day.").foregroundStyle(.secondary)
                         }
                         if let next = model.nextExercise {
-                            Text("Next: \(next.displayName)").font(.caption).foregroundStyle(.secondary)
+                            HStack(spacing: 7) {
+                                Image(systemName: "arrow.right.circle")
+                                    .foregroundStyle(.secondary)
+                                Text("Next · \(next.displayName)")
+                                    .font(.caption.weight(.medium))
+                                    .lineLimit(2)
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
                         }
                         if snapshot.activeSessionID == nil && (model.liveStatus == .idle || isLiveError) {
-                            Button("Start") { model.startSession() }.buttonStyle(.borderedProminent)
+                            Button {
+                                model.startSession()
+                            } label: {
+                                Label("Start workout", systemImage: "play.fill")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
                         } else if model.liveStatus == .running || model.liveStatus == .paused {
-                            Button("Finish") { model.finishSession() }.buttonStyle(.bordered)
+                            Button {
+                                model.finishSession()
+                            } label: {
+                                Label("Finish workout", systemImage: "checkmark")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
                         } else if case .error = model.liveStatus {
                             Text("Workout could not continue. Retry the visible command or start again after resolving the error.")
                                 .font(.caption)
@@ -55,11 +120,18 @@ struct WatchWorkoutView: View {
                         ContentUnavailableView("Open HealthCoach on iPhone", systemImage: "iphone", description: Text("The Watch uses a cached accepted workout and never connects to the Mac directly."))
                     }
                     if let error = model.lastError {
-                        Text(error).font(.caption).foregroundStyle(.red)
+                        Label(error, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
                     }
                     if !model.terminalCommands.isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("Needs attention").font(.subheadline.bold())
+                            Label("Needs attention", systemImage: "exclamationmark.triangle.fill")
+                                .font(.subheadline.bold())
+                                .foregroundStyle(.orange)
                             ForEach(model.terminalCommands) { command in
                                 VStack(alignment: .leading) {
                                     Text(command.kind.rawValue).font(.caption)
@@ -68,9 +140,12 @@ struct WatchWorkoutView: View {
                                 }
                             }
                         }
+                        .padding(10)
+                        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
                     }
                 }
-                .padding(.horizontal, 8)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 12)
             }
             .navigationTitle("Workout")
         }
@@ -108,45 +183,37 @@ private struct LiveWorkoutMetricsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            HStack {
-                Image(systemName: "heart.fill").foregroundStyle(.red)
-                Text(model.liveStatus.title).font(.subheadline.bold())
+            HStack(spacing: 7) {
+                Image(systemName: "heart.fill")
+                    .foregroundStyle(.red)
+                Text(model.liveStatus.title)
+                    .font(.subheadline.bold())
+                Spacer()
+                if let elapsed = model.liveMetrics?.elapsedSeconds {
+                    Text(duration(elapsed))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
             }
             HStack(spacing: 8) {
-                metric(title: "HR", value: heartRate(model.liveMetrics?.heartRateBpm))
-                metric(title: "Energy", value: energy(model.liveMetrics?.activeEnergyKcal))
+                WatchMetricTile(title: "Heart rate", value: metricValue(model.liveMetrics?.heartRateBpm), unit: "bpm", systemImage: "heart.fill", tint: .red)
+                WatchMetricTile(title: "Active energy", value: metricValue(model.liveMetrics?.activeEnergyKcal), unit: "kcal", systemImage: "flame.fill", tint: WatchPalette.energy)
             }
             HStack(spacing: 8) {
-                metric(title: "Avg", value: heartRate(model.liveMetrics?.averageHeartRateBpm))
-                metric(title: "Peak", value: heartRate(model.liveMetrics?.peakHeartRateBpm))
-            }
-            if let elapsed = model.liveMetrics?.elapsedSeconds {
-                Text("Elapsed \(duration(elapsed))").font(.caption2).foregroundStyle(.secondary)
+                WatchMetricTile(title: "Average", value: metricValue(model.liveMetrics?.averageHeartRateBpm), unit: "bpm", systemImage: "waveform.path.ecg", tint: WatchPalette.accent)
+                WatchMetricTile(title: "Peak", value: metricValue(model.liveMetrics?.peakHeartRateBpm), unit: "bpm", systemImage: "arrow.up.right", tint: .purple)
             }
             Text("Live values come from this Watch's HealthKit workout session.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
-        .padding(8)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .padding(10)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 13))
     }
 
-    private func metric(title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.caption2).foregroundStyle(.secondary)
-            Text(value).font(.headline.monospacedDigit())
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func heartRate(_ value: Double?) -> String {
+    private func metricValue(_ value: Double?) -> String {
         guard let value else { return "—" }
-        return "\(Int(value.rounded())) bpm"
-    }
-
-    private func energy(_ value: Double?) -> String {
-        guard let value else { return "—" }
-        return "\(Int(value.rounded())) kcal"
+        return String(Int(value.rounded()))
     }
 
     private func duration(_ value: Double) -> String {
@@ -155,6 +222,39 @@ private struct LiveWorkoutMetricsView: View {
         let minutes = (totalSeconds % 3_600) / 60
         let seconds = totalSeconds % 60
         return hours > 0 ? String(format: "%d:%02d:%02d", hours, minutes, seconds) : String(format: "%02d:%02d", minutes, seconds)
+    }
+}
+
+private struct WatchMetricTile: View {
+    let title: String
+    let value: String
+    let unit: String
+    let systemImage: String
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 5) {
+                Image(systemName: systemImage)
+                    .font(.caption2)
+                    .foregroundStyle(tint)
+                Text(title)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            HStack(alignment: .lastTextBaseline, spacing: 3) {
+                Text(value)
+                    .font(.title3.weight(.bold))
+                    .monospacedDigit()
+                Text(unit)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(9)
+        .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 11))
     }
 }
 
