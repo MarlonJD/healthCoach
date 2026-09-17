@@ -10,6 +10,7 @@ public struct CodexAppServerConfiguration: Sendable {
     public var reasoningEffort: String
     public var serviceTier: String
     public var allowedMCPTools: Set<String>
+    public var networkAccess: Bool
 
     public init(
         executableURL: URL,
@@ -19,7 +20,8 @@ public struct CodexAppServerConfiguration: Sendable {
         modelID: String = "gpt-5.6-luna",
         reasoningEffort: String = "max",
         serviceTier: String = "priority",
-        allowedMCPTools: Set<String> = HealthCoachMCPToolCatalog.nameSet
+        allowedMCPTools: Set<String> = HealthCoachMCPToolCatalog.nameSet,
+        networkAccess: Bool = false
     ) {
         self.executableURL = executableURL
         self.mcpExecutableURL = mcpExecutableURL
@@ -29,6 +31,7 @@ public struct CodexAppServerConfiguration: Sendable {
         self.reasoningEffort = reasoningEffort
         self.serviceTier = serviceTier
         self.allowedMCPTools = allowedMCPTools
+        self.networkAccess = networkAccess
     }
 }
 
@@ -171,7 +174,7 @@ public actor CodexAppServerClient {
         }
     }
 
-    public func runTurn(prompt: String, outputSchema: Data, developerInstructions: String) async throws -> CodexTurnResult {
+    public func runTurn(prompt: String, outputSchema: Data, developerInstructions: String, imageData: [Data] = []) async throws -> CodexTurnResult {
         guard isInitialized else { throw HealthCoachError.unavailable("Codex App Server is not initialized.") }
         let threadResponse = try await request(
             method: "thread/start",
@@ -190,14 +193,21 @@ public actor CodexAppServerClient {
             throw HealthCoachError.protocolError("thread/start did not return a thread id.")
         }
         let schemaObject = try JSONSerialization.jsonObject(with: outputSchema)
+        var input: [[String: Any]] = [["type": "text", "text": prompt]]
+        input.append(contentsOf: imageData.map { data in
+            [
+                "type": "image",
+                "url": "data:image/jpeg;base64,\(data.base64EncodedString())"
+            ]
+        })
         let turnResponse = try await request(
             method: "turn/start",
             params: [
                 "threadId": threadID,
-                "input": [["type": "text", "text": prompt]],
+                "input": input,
                 "outputSchema": schemaObject,
                 "approvalPolicy": "never",
-                "sandboxPolicy": ["type": "readOnly", "networkAccess": false],
+                "sandboxPolicy": ["type": "readOnly", "networkAccess": configuration.networkAccess],
                 "effort": configuration.reasoningEffort,
                 "serviceTierForTurn": configuration.serviceTier
             ]
@@ -220,9 +230,11 @@ public actor CodexAppServerClient {
                 let message = ((params["error"] as? [String: Any])?["message"] as? String) ?? "Codex reported an error."
                 throw HealthCoachError.protocolError(message)
             }
-            guard params["threadId"] as? String == threadID,
-                  params["turnId"] as? String == turnID,
-                  let completedTurn = params["turn"] as? [String: Any] else { continue }
+            guard let completedTurn = matchingCompletedTurn(
+                from: params,
+                threadID: threadID,
+                turnID: turnID
+            ) else { continue }
             guard let result = try completedTurnIfTerminal(completedTurn, threadID: threadID, turnID: turnID) else {
                 throw HealthCoachError.protocolError("Codex returned no terminal turn state.")
             }
@@ -383,7 +395,7 @@ public actor CodexAppServerClient {
 
         [apps._default]
         enabled = false
-        open_world_enabled = false
+        open_world_enabled = \(configuration.networkAccess ? "true" : "false")
         destructive_enabled = false
 
         [mcp_servers.healthcoach]
@@ -425,6 +437,13 @@ public actor CodexAppServerClient {
         activeThreadID = nil
         activeTurnID = nil
     }
+}
+
+func matchingCompletedTurn(from params: [String: Any], threadID: String, turnID: String) -> [String: Any]? {
+    guard params["threadId"] as? String == threadID,
+          let completedTurn = params["turn"] as? [String: Any],
+          completedTurn["id"] as? String == turnID else { return nil }
+    return completedTurn
 }
 
 public enum CodexAppServerProbe {

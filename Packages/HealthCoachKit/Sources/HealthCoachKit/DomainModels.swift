@@ -6,6 +6,9 @@ public enum HealthCoachConstants {
     public static let maximumFrameBytes = 1_048_576
     public static let maximumBatchRecords = 100
     public static let maximumHistoryDays = 90
+    public static let maximumEquipmentPhotos = 4
+    public static let maximumEquipmentPhotoBytes = 256 * 1024
+    public static let maximumEquipmentPhotoPayloadBytes = 700 * 1024
 }
 
 public enum HealthCoachJSON {
@@ -93,6 +96,8 @@ public struct UserProfile: Codable, Identifiable, Equatable, Sendable {
     public let id: UUID
     public var displayName: String
     public var experience: ExperienceLevel
+    public var trainingExperienceMonths: Int?
+    public var recentBreakWeeks: Int?
     public var daysPerWeek: Int
     public var sessionDurationMinutes: Int
     public var scheduleConstraints: String
@@ -104,6 +109,8 @@ public struct UserProfile: Codable, Identifiable, Equatable, Sendable {
         id: UUID = UUID(),
         displayName: String = "",
         experience: ExperienceLevel = .beginner,
+        trainingExperienceMonths: Int? = nil,
+        recentBreakWeeks: Int? = nil,
         daysPerWeek: Int = 3,
         sessionDurationMinutes: Int = 45,
         scheduleConstraints: String = "",
@@ -114,6 +121,8 @@ public struct UserProfile: Codable, Identifiable, Equatable, Sendable {
         self.id = id
         self.displayName = displayName
         self.experience = experience
+        self.trainingExperienceMonths = trainingExperienceMonths
+        self.recentBreakWeeks = recentBreakWeeks
         self.daysPerWeek = daysPerWeek
         self.sessionDurationMinutes = sessionDurationMinutes
         self.scheduleConstraints = scheduleConstraints
@@ -125,27 +134,33 @@ public struct UserProfile: Codable, Identifiable, Equatable, Sendable {
 
 public struct Goals: Codable, Identifiable, Equatable, Sendable {
     public let id: UUID
+    public var primaryGoal: String?
     public var currentWeightKg: Double?
     public var targetWeightKg: Double?
     public var targetBodyFatPercent: Double?
     public var targetWaistCm: Double?
+    public var targetTimeframeWeeks: Int?
     public var revision: Int
     public var updatedAt: Date
 
     public init(
         id: UUID = UUID(),
+        primaryGoal: String? = nil,
         currentWeightKg: Double? = nil,
         targetWeightKg: Double? = nil,
         targetBodyFatPercent: Double? = nil,
         targetWaistCm: Double? = nil,
+        targetTimeframeWeeks: Int? = nil,
         revision: Int = 1,
         updatedAt: Date = Date()
     ) {
         self.id = id
+        self.primaryGoal = primaryGoal
         self.currentWeightKg = currentWeightKg
         self.targetWeightKg = targetWeightKg
         self.targetBodyFatPercent = targetBodyFatPercent
         self.targetWaistCm = targetWaistCm
+        self.targetTimeframeWeeks = targetTimeframeWeeks
         self.revision = revision
         self.updatedAt = updatedAt
     }
@@ -668,13 +683,13 @@ public struct TrainingProgram: Codable, Identifiable, Equatable, Sendable {
         guard Set(equipment).isDisjoint(with: excludedEquipment) else {
             throw HealthCoachError.invalidOutput("The program uses excluded equipment.")
         }
-        var exerciseIDs = Set<String>()
         for day in days {
             guard day.order >= 0 else { throw HealthCoachError.invalidOutput("Training day order must be non-negative.") }
             guard !day.exercises.isEmpty else { throw HealthCoachError.invalidOutput("Each training day must contain an exercise.") }
             guard Set(day.exercises.map(\.order)).count == day.exercises.count else {
                 throw HealthCoachError.invalidOutput("Exercise order must be unique within a day.")
             }
+            var exerciseIDs = Set<String>()
             for exercise in day.exercises {
                 guard exercise.exerciseID.matchesStableExerciseID else {
                     throw HealthCoachError.invalidOutput("Invalid exercise id \(exercise.exerciseID).")
@@ -687,7 +702,7 @@ public struct TrainingProgram: Codable, Identifiable, Equatable, Sendable {
                     throw HealthCoachError.invalidOutput("The program uses excluded equipment.")
                 }
                 guard exerciseIDs.insert(exercise.exerciseID).inserted else {
-                    throw HealthCoachError.invalidOutput("Duplicate exercise id \(exercise.exerciseID).")
+                    throw HealthCoachError.invalidOutput("Duplicate exercise id \(exercise.exerciseID) within the same day.")
                 }
                 var alternativeIDs = Set<String>()
                 for alternative in exercise.alternatives {
@@ -736,19 +751,101 @@ public struct Exercise: Codable, Identifiable, Equatable, Sendable {
     }
 }
 
+public enum EquipmentFacilityType: String, Codable, CaseIterable, Sendable {
+    case standardGym
+    case smallGym
+    case mediumGym
+    case homeNoEquipment
+    case homeLimitedEquipment
+
+    public var displayName: String {
+        switch self {
+        case .standardGym: return "Standard gym"
+        case .smallGym: return "Small gym"
+        case .mediumGym: return "Medium gym"
+        case .homeNoEquipment: return "Home — no equipment"
+        case .homeLimitedEquipment: return "Home — limited equipment"
+        }
+    }
+}
+
 public struct EquipmentProfile: Codable, Identifiable, Equatable, Sendable {
     public let id: UUID
     public var available: [String]
     public var excluded: [String]
+    public var facilityType: EquipmentFacilityType?
+    public var facilityName: String?
+    public var referencePhotos: [Data]?
+    public var onlineLookupAllowed: Bool?
     public var revision: Int
     public var updatedAt: Date
 
-    public init(id: UUID = UUID(), available: [String] = [], excluded: [String] = [], revision: Int = 1, updatedAt: Date = Date()) {
+    public init(
+        id: UUID = UUID(),
+        available: [String] = [],
+        excluded: [String] = [],
+        facilityType: EquipmentFacilityType? = nil,
+        facilityName: String? = nil,
+        referencePhotos: [Data]? = nil,
+        onlineLookupAllowed: Bool? = nil,
+        revision: Int = 1,
+        updatedAt: Date = Date()
+    ) {
         self.id = id
         self.available = available
         self.excluded = excluded
+        self.facilityType = facilityType
+        self.facilityName = facilityName
+        self.referencePhotos = referencePhotos
+        self.onlineLookupAllowed = onlineLookupAllowed
         self.revision = revision
         self.updatedAt = updatedAt
+    }
+}
+
+public struct EquipmentDiscovery: Codable, Equatable, Sendable {
+    public var facilityType: EquipmentFacilityType?
+    public var facilityName: String?
+    public var detectedEquipment: [String]
+    public var confidenceByEquipment: [String: Double]
+    public var rationale: String
+    public var sources: [String]
+    public var limitations: [String]
+
+    public init(
+        facilityType: EquipmentFacilityType? = nil,
+        facilityName: String? = nil,
+        detectedEquipment: [String],
+        confidenceByEquipment: [String: Double] = [:],
+        rationale: String,
+        sources: [String] = [],
+        limitations: [String] = []
+    ) {
+        self.facilityType = facilityType
+        self.facilityName = facilityName
+        self.detectedEquipment = detectedEquipment
+        self.confidenceByEquipment = confidenceByEquipment
+        self.rationale = rationale
+        self.sources = sources
+        self.limitations = limitations
+    }
+
+    public func validate() throws {
+        let normalized = detectedEquipment.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        guard normalized.allSatisfy({ !$0.isEmpty }), Set(normalized).count == normalized.count else {
+            throw HealthCoachError.invalidOutput("Detected equipment must be non-empty and unique.")
+        }
+        guard detectedEquipment.count <= 100 else {
+            throw HealthCoachError.invalidOutput("Too many detected equipment items.")
+        }
+        guard confidenceByEquipment.allSatisfy({ key, value in
+            normalized.contains(key.lowercased()) && value.isFinite && (0...1).contains(value)
+        }) else {
+            throw HealthCoachError.invalidOutput("Equipment confidence values are invalid.")
+        }
+        guard sources.count <= 20, limitations.count <= 20 else {
+            throw HealthCoachError.invalidOutput("Too many equipment discovery annotations.")
+        }
     }
 }
 
@@ -816,6 +913,7 @@ public struct HealthSummary: Codable, Identifiable, Equatable, Sendable {
 public enum JobKind: String, Codable, CaseIterable, Sendable {
     case analyzeMeal
     case generateProgram
+    case discoverEquipment
     case suggestProgression
     case answerQuestion
 }
@@ -825,6 +923,7 @@ public enum JobStatus: String, Codable, Sendable {
     case running
     case succeeded
     case failed
+    case deadLettered
     case cancelled
 }
 
@@ -833,6 +932,7 @@ public enum JobExecutionStatus: String, Codable, Sendable {
     case delivered
     case acknowledged
     case stale
+    case deadLettered
 }
 
 public enum JobIntent: String, Codable, Sendable {
@@ -854,7 +954,12 @@ public struct JobContext: Codable, Equatable, Sendable {
 
 public struct JobRequest: Codable, Equatable, Sendable {
     public var mealID: UUID?
+    public var programID: UUID?
     public var question: String?
+    public var facilityType: EquipmentFacilityType?
+    public var facilityName: String?
+    public var referenceImageData: [Data]?
+    public var allowsOnlineLookup: Bool?
     public var localDateFrom: String?
     public var localDateTo: String?
     public var exerciseID: String?
@@ -862,14 +967,24 @@ public struct JobRequest: Codable, Equatable, Sendable {
 
     public init(
         mealID: UUID? = nil,
+        programID: UUID? = nil,
         question: String? = nil,
+        facilityType: EquipmentFacilityType? = nil,
+        facilityName: String? = nil,
+        referenceImageData: [Data]? = nil,
+        allowsOnlineLookup: Bool? = nil,
         localDateFrom: String? = nil,
         localDateTo: String? = nil,
         exerciseID: String? = nil,
         sessionID: UUID? = nil
     ) {
         self.mealID = mealID
+        self.programID = programID
         self.question = question
+        self.facilityType = facilityType
+        self.facilityName = facilityName
+        self.referenceImageData = referenceImageData
+        self.allowsOnlineLookup = allowsOnlineLookup
         self.localDateFrom = localDateFrom
         self.localDateTo = localDateTo
         self.exerciseID = exerciseID
@@ -944,13 +1059,15 @@ public struct JobOutput: Codable, Equatable, Sendable {
     public var kind: JobKind
     public var meal: MealAnalysis?
     public var program: TrainingProgram?
+    public var equipment: EquipmentDiscovery?
     public var progression: ProgressionProposal?
     public var coaching: CoachingAnswer?
 
-    public init(kind: JobKind, meal: MealAnalysis? = nil, program: TrainingProgram? = nil, progression: ProgressionProposal? = nil, coaching: CoachingAnswer? = nil) {
+    public init(kind: JobKind, meal: MealAnalysis? = nil, program: TrainingProgram? = nil, equipment: EquipmentDiscovery? = nil, progression: ProgressionProposal? = nil, coaching: CoachingAnswer? = nil) {
         self.kind = kind
         self.meal = meal
         self.program = program
+        self.equipment = equipment
         self.progression = progression
         self.coaching = coaching
     }
@@ -974,6 +1091,9 @@ public struct JobOutput: Codable, Equatable, Sendable {
             }) else {
                 throw HealthCoachError.invalidOutput("Every generated exercise must carry a cached alternative.")
             }
+        case .discoverEquipment:
+            guard let equipment else { throw HealthCoachError.invalidOutput("Equipment discovery result is missing.") }
+            try equipment.validate()
         case .suggestProgression:
             guard let progression else { throw HealthCoachError.invalidOutput("Progression result is missing.") }
             guard progression.exerciseID.matchesStableExerciseID else {

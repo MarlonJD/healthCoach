@@ -9,13 +9,35 @@ final class HealthCoachMacAppDelegate: NSObject, NSApplicationDelegate {
         // activatable and visible when the user chooses Open HealthCoach.
         NSApp.setActivationPolicy(.regular)
     }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if flag {
+            NSApp.activate(ignoringOtherApps: true)
+        } else {
+            MacDashboardWindowController.shared?.showStoredModel()
+        }
+        return true
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
 }
 
 @MainActor
 final class MacDashboardWindowController: NSObject, ObservableObject {
+    static weak var shared: MacDashboardWindowController?
     private var window: NSWindow?
+    private weak var model: MacAppModel?
+
+    init(model: MacAppModel? = nil) {
+        self.model = model
+        super.init()
+        Self.shared = self
+    }
 
     func show(model: MacAppModel) {
+        self.model = model
         if let window {
             activate(window)
             return
@@ -36,6 +58,11 @@ final class MacDashboardWindowController: NSObject, ObservableObject {
         activate(window)
     }
 
+    func showStoredModel() {
+        guard let model else { return }
+        show(model: model)
+    }
+
     private func activate(_ window: NSWindow) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
@@ -46,8 +73,14 @@ final class MacDashboardWindowController: NSObject, ObservableObject {
 @main
 struct HealthCoachMacApp: App {
     @NSApplicationDelegateAdaptor(HealthCoachMacAppDelegate.self) private var appDelegate
-    @StateObject private var model = MacAppModel()
-    @StateObject private var dashboardWindow = MacDashboardWindowController()
+    @StateObject private var model: MacAppModel
+    @StateObject private var dashboardWindow: MacDashboardWindowController
+
+    init() {
+        let model = MacAppModel()
+        _model = StateObject(wrappedValue: model)
+        _dashboardWindow = StateObject(wrappedValue: MacDashboardWindowController(model: model))
+    }
 
     var body: some Scene {
         MenuBarExtra("HealthCoach", systemImage: "heart.text.square") {

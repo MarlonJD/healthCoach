@@ -325,7 +325,7 @@ struct TodayView: View {
                         .foregroundStyle(HealthCoachPalette.secondaryInk)
                     if let measurement = model.currentWeightMeasurement {
                         HStack(alignment: .lastTextBaseline, spacing: 5) {
-                            Text(String(format: "%.1f", measurement.value))
+                            Text(healthCoachDecimal(measurement.value))
                                 .font(.system(size: 34, weight: .bold, design: .rounded))
                                 .monospacedDigit()
                             Text(measurement.unit)
@@ -349,7 +349,7 @@ struct TodayView: View {
                         Text("Target")
                             .font(.caption)
                             .foregroundStyle(HealthCoachPalette.secondaryInk)
-                        Text(String(format: "%.1f kg", target))
+                        Text("\(healthCoachDecimal(target)) kg")
                             .font(.headline.weight(.bold))
                         if let current = model.currentWeightMeasurement {
                             Text(targetDeltaText(current: current.value, target: target))
@@ -365,7 +365,7 @@ struct TodayView: View {
                     Text("7-day average")
                         .font(.caption)
                         .foregroundStyle(HealthCoachPalette.secondaryInk)
-                    Text(model.weightTrend.averageKg.map { String(format: "%.1f kg", $0) } ?? "No samples")
+                    Text(model.weightTrend.averageKg.map { "\(healthCoachDecimal($0)) kg" } ?? "No samples")
                         .font(.headline.weight(.bold))
                 }
                 Spacer()
@@ -412,7 +412,7 @@ struct TodayView: View {
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
                     HealthCoachMetricTile(label: "Steps", value: summary.steps.map { String(Int($0.rounded())) } ?? "—", unit: "steps", systemImage: "figure.walk", tint: HealthCoachPalette.mint)
                     HealthCoachMetricTile(label: "Active energy", value: summary.activeEnergyKcal.map { String(Int($0.rounded())) } ?? "—", unit: "kcal", systemImage: "flame.fill", tint: HealthCoachPalette.orange)
-                    HealthCoachMetricTile(label: "Sleep", value: summary.sleepHours.map { String(format: "%.1f", $0) } ?? "—", unit: "hours", systemImage: "bed.double.fill", tint: HealthCoachPalette.indigo)
+                    HealthCoachMetricTile(label: "Sleep", value: summary.sleepHours.map { healthCoachDecimal($0) } ?? "—", unit: "hours", systemImage: "bed.double.fill", tint: HealthCoachPalette.indigo)
                     HealthCoachMetricTile(label: "Resting HR", value: summary.restingHeartRateBpm.map { String(Int($0.rounded())) } ?? "—", unit: "bpm", systemImage: "heart.fill", tint: HealthCoachPalette.coral)
                 }
             } else {

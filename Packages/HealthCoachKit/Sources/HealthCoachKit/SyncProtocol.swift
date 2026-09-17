@@ -212,6 +212,8 @@ public actor SyncSessionCoordinator {
     private var localAcknowledgedSequence: Int64 = 0
     private var authenticated = false
     private var receivingSnapshot = false
+    private var lastRemoteActivityAt: Date?
+    private let remoteSettleWindow: TimeInterval = 0.25
 
     public init(
         store: HealthCoachStore,
@@ -271,6 +273,7 @@ public actor SyncSessionCoordinator {
             localAcknowledgedSequence = max(localAcknowledgedSequence, hello.lastAppliedSequence)
             try store.acknowledgeOutbox(pairID: pairID, sender: localSender, through: hello.lastAppliedSequence)
             authenticated = true
+            lastRemoteActivityAt = Date()
             let hasRecords = try !store.snapshotRecords(limit: 1).isEmpty
             let peerNeedsSnapshot = hello.lastAppliedSequence == 0 && hasRecords
             let localNeedsSnapshot = remoteAppliedSequence == 0 && hello.currentWatermark > 0
@@ -287,6 +290,7 @@ public actor SyncSessionCoordinator {
                 throw HealthCoachError.protocolError("The authenticated response is invalid.")
             }
             authenticated = true
+            lastRemoteActivityAt = Date()
             localAcknowledgedSequence = max(localAcknowledgedSequence, response.cursor)
             try store.acknowledgeOutbox(pairID: pairID, sender: localSender, through: response.cursor)
             if response.requiresSnapshot {
@@ -301,6 +305,7 @@ public actor SyncSessionCoordinator {
             guard batch.sender == remoteSender else { throw HealthCoachError.wrongOwner }
             let ack = try store.applyIncoming(batch, authenticatedPeerID: remotePeerID, pairID: pairID)
             remoteAppliedSequence = ack.lastSequence
+            lastRemoteActivityAt = Date()
             let acknowledgment = try makeEnvelope(kind: .acknowledgment, body: ack)
             var responses = [acknowledgment]
             if let pauseAcknowledgment = try makePauseAcknowledgment(for: batch) {
@@ -321,6 +326,7 @@ public actor SyncSessionCoordinator {
             let descriptor = try HealthCoachJSON.decode(SnapshotDescriptor.self, from: envelope.body)
             guard descriptor.pairID == pairID, descriptor.sourceSender == remoteSender else { throw HealthCoachError.wrongOwner }
             receivingSnapshot = true
+            lastRemoteActivityAt = Date()
             try store.beginSnapshot(descriptor)
             return []
 
@@ -337,6 +343,7 @@ public actor SyncSessionCoordinator {
             try store.completeSnapshot(pairID: pairID, snapshotID: descriptor.snapshotID)
             remoteAppliedSequence = descriptor.sourceSequence
             receivingSnapshot = false
+            lastRemoteActivityAt = Date()
             return try makeNextOutgoing()
 
         case .pausePolicy:
@@ -373,7 +380,9 @@ public actor SyncSessionCoordinator {
     /// this only describes the durable initial sync exchange.
     public func isQuiescent() -> Bool {
         guard authenticated, !receivingSnapshot else { return false }
-        return (try? store.pendingOutbox(sender: localSender, after: localAcknowledgedSequence, limit: 1).isEmpty) ?? false
+        guard (try? store.pendingOutbox(sender: localSender, after: localAcknowledgedSequence, limit: 1).isEmpty) ?? false else { return false }
+        guard let lastRemoteActivityAt else { return true }
+        return Date().timeIntervalSince(lastRemoteActivityAt) >= remoteSettleWindow
     }
 
     private func makeNextOutgoing(limit: Int = HealthCoachConstants.maximumBatchRecords) throws -> [SyncEnvelope] {

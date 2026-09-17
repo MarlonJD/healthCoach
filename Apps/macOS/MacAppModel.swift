@@ -14,6 +14,7 @@ final class MacAppModel: ObservableObject {
     private var worker: CodexJobWorker?
     private var workerTask: Task<Void, Never>?
     private var workerRetryTask: Task<Void, Never>?
+    private var queueListenerTask: Task<Void, Never>?
     private var workerRetryAttempt = 0
     private var pairingRefreshTask: Task<Void, Never>?
     private var syncChangeContinuation: AsyncStream<Void>.Continuation?
@@ -21,12 +22,14 @@ final class MacAppModel: ObservableObject {
 
     private let pairingRenewalLeadTime: TimeInterval = 30
     private let workerRetryDelays: [UInt64] = [5, 15, 30, 60, 60]
+    private let queuePollInterval: UInt64 = 2_000_000_000
 
     @Published private(set) var pairingCredential: PairingCredential?
     @Published private(set) var qrPayload: Data?
     @Published private(set) var syncStatus = "Starting local listener…"
     @Published private(set) var codexStatus = CodexStatus(readiness: .missingInstallation)
     @Published private(set) var jobs: [CoachJob] = []
+    @Published private(set) var pendingReverseSyncCount = 0
     @Published private(set) var lastError: String?
     @Published private(set) var lastSyncAt: Date?
     @Published var analysisPaused = false
@@ -59,6 +62,7 @@ final class MacAppModel: ObservableObject {
         listener?.stop()
         workerTask?.cancel()
         workerRetryTask?.cancel()
+        queueListenerTask?.cancel()
         pairingRefreshTask?.cancel()
     }
 
@@ -71,6 +75,8 @@ final class MacAppModel: ObservableObject {
         }
         do {
             try store.recoverStagedSnapshots()
+            _ = try store.normalizeFailedJobsToDeadLetters()
+            _ = try store.recoverInterruptedJobs()
             var shouldRunWorker = false
             if let pairID = store.activePairID, let credential = try pairingStore.load(pairID: pairID), credential.isUsable {
                 pairingCredential = credential
@@ -88,7 +94,10 @@ final class MacAppModel: ObservableObject {
                 try beginPairing()
             }
             refresh()
-            if shouldRunWorker { runWorker() }
+            if shouldRunWorker {
+                startQueueListener()
+                runWorker()
+            }
         } catch {
             lastError = error.localizedDescription
             syncStatus = "Listener unavailable"
@@ -99,6 +108,7 @@ final class MacAppModel: ObservableObject {
         guard let store else { return }
         do {
             jobs = try store.jobs()
+            pendingReverseSyncCount = try store.pendingOutbox(sender: .mac).count
             lastError = nil
         } catch { lastError = error.localizedDescription }
     }
@@ -110,13 +120,46 @@ final class MacAppModel: ObservableObject {
         startWorker()
     }
 
+    private func startQueueListener() {
+        guard queueListenerTask == nil else { return }
+        let interval = queuePollInterval
+        queueListenerTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                self?.startWorkerIfNeeded()
+                do {
+                    try await Task.sleep(nanoseconds: interval)
+                } catch {
+                    return
+                }
+            }
+        }
+    }
+
+    private func stopQueueListener() {
+        queueListenerTask?.cancel()
+        queueListenerTask = nil
+    }
+
+    private func startWorkerIfNeeded() {
+        startWorker()
+    }
+
     private func startWorker() {
         guard workerTask == nil else { return }
+        guard workerRetryTask == nil else { return }
         guard !analysisPaused else {
             syncStatus = "Analysis paused locally"
             return
         }
         guard let store else { return }
+        let pendingJobs: [CoachJob]
+        do {
+            pendingJobs = try store.pendingJobs()
+        } catch {
+            lastError = error.localizedDescription
+            return
+        }
+        guard !pendingJobs.isEmpty else { return }
         guard codexStatus.readiness == .ready else {
             lastError = codexStatus.lastError ?? "Codex is not ready."
             return
@@ -134,17 +177,22 @@ final class MacAppModel: ObservableObject {
         self.worker = worker
         syncStatus = "Running queued Codex work"
         workerTask = Task { [weak self, worker] in
-            let outcomes = await worker.runPending()
+            let outcomes = await worker.runPending { @MainActor [weak self] in
+                self?.refresh()
+                self?.signalSyncChange()
+            }
             await MainActor.run {
                 self?.workerTask = nil
                 self?.refresh()
                 self?.lastSyncAt = Date()
                 guard let self else { return }
-                self.signalSyncChange()
                 let queued = outcomes.filter { $0.status == .queued }
                 let failed = outcomes.filter { $0.status == .failed }
+                let deadLettered = outcomes.filter { $0.status == .deadLettered }
                 if let queuedError = queued.compactMap(\.message).first {
                     self.lastError = queuedError
+                } else if let deadLetterError = deadLettered.compactMap(\.message).first {
+                    self.lastError = deadLetterError
                 } else if let failedError = failed.compactMap(\.message).first {
                     self.lastError = failedError
                 } else {
@@ -153,11 +201,12 @@ final class MacAppModel: ObservableObject {
                 if !queued.isEmpty {
                     self.syncStatus = "Codex unavailable; queued work retained"
                     self.scheduleWorkerRetry()
-                } else if !failed.isEmpty {
-                    self.syncStatus = "Codex work failed; review the error"
+                } else if !deadLettered.isEmpty || !failed.isEmpty {
+                    self.syncStatus = "Some Codex work moved to the dead-letter queue"
                 } else {
                     self.syncStatus = outcomes.isEmpty ? "No queued work" : "Codex work complete"
                 }
+                self.startWorkerIfNeeded()
             }
         }
     }
@@ -194,6 +243,7 @@ final class MacAppModel: ObservableObject {
             try store?.setActivePair(nil)
             listener?.stop()
             listener = nil
+            stopQueueListener()
             try beginPairing()
             syncStatus = "Unpaired; scan the new QR"
         } catch { lastError = error.localizedDescription }
@@ -314,6 +364,7 @@ final class MacAppModel: ObservableObject {
                 syncStatus = "Paired and synced"
                 lastSyncAt = Date()
                 refresh()
+                startQueueListener()
                 runWorker()
             }
         } catch {
@@ -329,9 +380,8 @@ final class MacAppModel: ObservableObject {
         // cannot interrupt an unrelated newer turn.
         if let worker {
             Task {
-                if await worker.activeJobNeedsCancellation() {
-                    await worker.cancelActiveJob()
-                }
+                let jobs = await worker.activeJobsNeedingCancellation()
+                await worker.cancelActiveJobs(jobs)
             }
         }
         runWorker()

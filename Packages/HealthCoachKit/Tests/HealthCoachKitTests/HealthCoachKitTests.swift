@@ -105,6 +105,392 @@ final class HealthCoachKitTests: XCTestCase {
         XCTAssertThrowsError(try restarted.saveMeal(Meal(localDate: "2026-09-16", originalText: "   "), enqueueAnalysis: false))
     }
 
+    func testDeadLetteredJobPersistsAndRetryRequeuesNewGeneration() throws {
+        let store = try HealthCoachStore(inMemory: true)
+        let meal = try store.saveMeal(Meal(localDate: "2026-09-16", originalText: "synthetic dead letter meal"), enqueueAnalysis: false)
+        let job = try store.createJob(
+            kind: .analyzeMeal,
+            request: JobRequest(mealID: meal.id),
+            inputRevision: meal.revision,
+            sourceRevision: meal.revision
+        )
+        let reason = "synthetic terminal output"
+        try store.recordMacExecutionUpdate(JobExecutionUpdate(
+            jobID: job.id,
+            generation: job.requestGeneration,
+            sourceRevision: job.sourceRevision,
+            status: .deadLettered,
+            attempts: CodexJobWorker.maxAttempts,
+            errorMessage: reason
+        ))
+
+        let deadLettered = try XCTUnwrap(store.job(id: job.id))
+        XCTAssertEqual(deadLettered.status, .deadLettered)
+        XCTAssertEqual(deadLettered.executionStatus, .deadLettered)
+        XCTAssertEqual(deadLettered.attempts, CodexJobWorker.maxAttempts)
+        XCTAssertEqual(deadLettered.errorMessage, reason)
+
+        let retried = try store.retryJob(id: job.id)
+        XCTAssertEqual(retried.status, .queued)
+        XCTAssertEqual(retried.requestGeneration, job.requestGeneration + 1)
+        XCTAssertEqual(retried.attempts, 0)
+        XCTAssertNil(retried.errorMessage)
+        XCTAssertTrue(try store.pendingJobs().contains { $0.id == job.id })
+    }
+
+    func testDelayedPhoneJobCommandDoesNotRewindMacResult() throws {
+        let store = try HealthCoachStore(inMemory: true)
+        let pairID = UUID()
+        let macPeerID = UUID()
+        try store.setActivePair(pairID)
+        let meal = try store.saveMeal(Meal(localDate: "2026-09-16", originalText: "synthetic stale command meal"), enqueueAnalysis: false)
+        let job = try store.createJob(
+            kind: .analyzeMeal,
+            request: JobRequest(mealID: meal.id),
+            inputRevision: meal.revision,
+            sourceRevision: meal.revision
+        )
+        try store.recordMacExecutionUpdate(JobExecutionUpdate(
+            jobID: job.id,
+            generation: job.requestGeneration,
+            sourceRevision: job.sourceRevision,
+            status: .running,
+            attempts: 1
+        ))
+        try store.recordMacResult(JobResultEnvelope(
+            jobID: job.id,
+            generation: job.requestGeneration,
+            kind: job.kind,
+            inputRevision: job.inputRevision,
+            sourceRevision: job.sourceRevision,
+            context: try store.jobContext(for: job),
+            output: syntheticMealOutput(mealID: meal.id, revision: meal.revision, jobID: job.id),
+            sourceModel: "synthetic"
+        ))
+
+        let delayedCommand = SyncMutation(
+            pairID: pairID,
+            sender: .phone,
+            sequence: 1,
+            mutationKind: .jobCommand,
+            entityType: .job,
+            recordID: job.id.uuidString,
+            owner: .phone,
+            sourceRevision: job.sourceRevision,
+            payload: try HealthCoachJSON.encode(job),
+            sourceWatermark: 1
+        )
+        _ = try store.applyIncoming(
+            SyncBatch(sender: .phone, firstSequence: 1, lastSequence: 1, mutations: [delayedCommand]),
+            authenticatedPeerID: macPeerID,
+            pairID: pairID
+        )
+
+        let preserved = try XCTUnwrap(store.job(id: job.id))
+        XCTAssertEqual(preserved.status, .succeeded)
+        XCTAssertEqual(preserved.executionStatus, .acknowledged)
+        XCTAssertEqual(preserved.attempts, 1)
+        XCTAssertNotNil(preserved.result)
+        XCTAssertEqual(try store.meal(id: meal.id)?.analysisStatus, .succeeded)
+    }
+
+    func testLegacyFailedJobNormalizesToDeadLetter() throws {
+        let store = try HealthCoachStore(inMemory: true)
+        let meal = try store.saveMeal(Meal(localDate: "2026-09-16", originalText: "synthetic legacy failure"), enqueueAnalysis: false)
+        let job = try store.createJob(kind: .analyzeMeal, request: JobRequest(mealID: meal.id), inputRevision: meal.revision, sourceRevision: meal.revision)
+        try store.recordMacExecutionUpdate(JobExecutionUpdate(
+            jobID: job.id,
+            generation: job.requestGeneration,
+            sourceRevision: job.sourceRevision,
+            status: .failed,
+            attempts: 1,
+            errorMessage: "legacy failure"
+        ))
+
+        XCTAssertEqual(try store.normalizeFailedJobsToDeadLetters(), 1)
+        let normalized = try XCTUnwrap(store.job(id: job.id))
+        XCTAssertEqual(normalized.status, .deadLettered)
+        XCTAssertEqual(normalized.executionStatus, .deadLettered)
+        XCTAssertEqual(normalized.errorMessage, "legacy failure")
+    }
+
+    func testNewPhoneRetryGenerationStartsQueuedDespiteCopiedFailureState() throws {
+        let store = try HealthCoachStore(inMemory: true)
+        let pairID = UUID()
+        let macPeerID = UUID()
+        try store.setActivePair(pairID)
+        let meal = try store.saveMeal(Meal(localDate: "2026-09-16", originalText: "synthetic retry generation"), enqueueAnalysis: false)
+        let job = try store.createJob(kind: .analyzeMeal, request: JobRequest(mealID: meal.id), inputRevision: meal.revision, sourceRevision: meal.revision)
+        try store.recordMacExecutionUpdate(JobExecutionUpdate(
+            jobID: job.id,
+            generation: job.requestGeneration,
+            sourceRevision: job.sourceRevision,
+            status: .deadLettered,
+            attempts: CodexJobWorker.maxAttempts,
+            errorMessage: "synthetic dead letter"
+        ))
+
+        var retriedPayload = job
+        retriedPayload.requestGeneration += 1
+        retriedPayload.status = .failed
+        retriedPayload.executionStatus = .delivered
+        retriedPayload.attempts = 4
+        retriedPayload.errorMessage = "copied old failure"
+        let mutation = SyncMutation(
+            pairID: pairID,
+            sender: .phone,
+            sequence: 1,
+            mutationKind: .jobCommand,
+            entityType: .job,
+            recordID: job.id.uuidString,
+            owner: .phone,
+            sourceRevision: job.sourceRevision,
+            payload: try HealthCoachJSON.encode(retriedPayload),
+            sourceWatermark: 1
+        )
+        _ = try store.applyIncoming(
+            SyncBatch(sender: .phone, firstSequence: 1, lastSequence: 1, mutations: [mutation]),
+            authenticatedPeerID: macPeerID,
+            pairID: pairID
+        )
+
+        let queued = try XCTUnwrap(store.job(id: job.id))
+        XCTAssertEqual(queued.requestGeneration, job.requestGeneration + 1)
+        XCTAssertEqual(queued.status, .queued)
+        XCTAssertEqual(queued.executionStatus, .notDelivered)
+        XCTAssertEqual(queued.attempts, 0)
+        XCTAssertNil(queued.errorMessage)
+    }
+
+    func testInterruptedRunningJobIsRecoveredToQueued() throws {
+        let store = try HealthCoachStore(inMemory: true)
+        let meal = try store.saveMeal(Meal(localDate: "2026-09-16", originalText: "synthetic interrupted job"), enqueueAnalysis: false)
+        let job = try store.createJob(kind: .analyzeMeal, request: JobRequest(mealID: meal.id), inputRevision: meal.revision, sourceRevision: meal.revision)
+        try store.recordMacExecutionUpdate(JobExecutionUpdate(
+            jobID: job.id,
+            generation: job.requestGeneration,
+            sourceRevision: job.sourceRevision,
+            status: .running,
+            attempts: 2,
+            threadID: "interrupted-thread",
+            turnID: "interrupted-turn"
+        ))
+
+        XCTAssertEqual(try store.recoverInterruptedJobs(), 1)
+        let recovered = try XCTUnwrap(store.job(id: job.id))
+        XCTAssertEqual(recovered.status, .queued)
+        XCTAssertEqual(recovered.executionStatus, .notDelivered)
+        XCTAssertEqual(recovered.attempts, 2)
+        XCTAssertNil(recovered.threadID)
+        XCTAssertNil(recovered.turnID)
+        XCTAssertNil(recovered.errorMessage)
+    }
+
+    func testPendingProgramRequestsAreDeduplicated() throws {
+        let store = try HealthCoachStore(inMemory: true)
+        let first = try store.createJob(kind: .generateProgram, request: JobRequest(), inputRevision: 1)
+        let second = try store.createJob(kind: .generateProgram, request: JobRequest(), inputRevision: 1)
+        XCTAssertEqual(second.id, first.id)
+        XCTAssertEqual(try store.jobs().filter { $0.kind == .generateProgram }.count, 1)
+    }
+
+    func testEquipmentDiscoveryIsDeduplicatedAndMergesDetectedEquipment() throws {
+        let store = try HealthCoachStore(inMemory: true)
+        try store.saveEquipment(EquipmentProfile(available: [], facilityType: .mediumGym, referencePhotos: [Data([0x01, 0x02])]))
+        let request = JobRequest(facilityType: .mediumGym, facilityName: "Synthetic Gym", referenceImageData: [Data([0x01])], allowsOnlineLookup: true)
+        let first = try store.createJob(kind: .discoverEquipment, request: request, inputRevision: 1, sourceRevision: 1)
+        let second = try store.createJob(kind: .discoverEquipment, request: request, inputRevision: 1, sourceRevision: 1)
+        XCTAssertEqual(first.id, second.id)
+
+        try store.recordMacResult(JobResultEnvelope(
+            jobID: first.id,
+            generation: first.requestGeneration,
+            kind: .discoverEquipment,
+            inputRevision: first.inputRevision,
+            sourceRevision: first.sourceRevision,
+            context: try store.jobContext(for: first),
+            output: JobOutput(kind: .discoverEquipment, equipment: EquipmentDiscovery(
+                facilityType: .mediumGym,
+                facilityName: "Synthetic Gym",
+                detectedEquipment: ["cable machine", "dumbbells"],
+                confidenceByEquipment: ["cable machine": 0.9, "dumbbells": 0.8],
+                rationale: "Synthetic fixture",
+                sources: ["https://example.com/gym"],
+                limitations: []
+            )),
+            sourceModel: "fixture"
+        ))
+
+        let equipment = try XCTUnwrap(store.equipment())
+        XCTAssertEqual(equipment.facilityType, .mediumGym)
+        XCTAssertEqual(equipment.facilityName, "Synthetic Gym")
+        XCTAssertTrue(equipment.available.contains("cable machine"))
+        XCTAssertTrue(equipment.available.contains("dumbbells"))
+    }
+
+    func testExistingActiveProgramDuplicatesAreCancelledAndRemainRetryable() throws {
+        let store = try HealthCoachStore(inMemory: true)
+        let pairID = UUID()
+        try store.setActivePair(pairID)
+        let first = try store.createJob(kind: .generateProgram, request: JobRequest(), inputRevision: 1)
+        var duplicate = CoachJob(kind: .generateProgram, request: JobRequest(), inputRevision: 1)
+        duplicate.createdAt = first.createdAt.addingTimeInterval(1)
+        duplicate.updatedAt = first.updatedAt.addingTimeInterval(1)
+
+        let mutation = SyncMutation(
+            pairID: pairID,
+            sender: .phone,
+            sequence: 1,
+            mutationKind: .jobCommand,
+            entityType: .job,
+            recordID: duplicate.id.uuidString,
+            owner: .phone,
+            sourceRevision: duplicate.sourceRevision,
+            payload: try HealthCoachJSON.encode(duplicate),
+            sourceWatermark: 1
+        )
+        _ = try store.applyIncoming(
+            SyncBatch(sender: .phone, firstSequence: 1, lastSequence: 1, mutations: [mutation]),
+            authenticatedPeerID: UUID(),
+            pairID: pairID
+        )
+
+        XCTAssertEqual(try store.deduplicateActiveProgramJobs(), 1)
+        let jobs = try store.jobs().filter { $0.kind == .generateProgram }
+        XCTAssertEqual(jobs.filter { $0.status == .queued || $0.status == .running }.count, 1)
+        let cancelled = try XCTUnwrap(jobs.first { $0.id == duplicate.id })
+        XCTAssertEqual(cancelled.status, .cancelled)
+        XCTAssertEqual(cancelled.intent, .cancelRequested)
+        XCTAssertEqual(cancelled.errorMessage, "Superseded by another active program request.")
+
+        let retried = try store.retryJob(id: duplicate.id)
+        XCTAssertEqual(retried.status, .queued)
+        XCTAssertEqual(retried.intent, .active)
+    }
+
+    func testResetProgramRequestsClearsJobsAndProposalsButKeepsCurrentProgram() throws {
+        let store = try HealthCoachStore(inMemory: true)
+        let job = try store.createJob(kind: .generateProgram, request: JobRequest(), inputRevision: 1)
+        let exercise = ProgramExercise(exerciseID: "push_up", displayName: "Push-up", order: 0, sets: 2, minimumReps: 5, maximumReps: 10)
+        let proposal = TrainingProgram(
+            name: "Synthetic proposal",
+            goalSummary: "Strength",
+            days: [TrainingDay(name: "Day A", order: 0, exercises: [exercise])],
+            equipment: [],
+            sourceJobID: job.id
+        )
+        try store.saveProgram(proposal)
+
+        XCTAssertEqual(try store.resetProgramRequests(), 2)
+        XCTAssertFalse(try store.jobs().contains { $0.kind == .generateProgram })
+        XCTAssertFalse(try store.programs().contains { $0.id == proposal.id })
+        XCTAssertTrue(try store.pendingOutbox(sender: .phone).contains { $0.mutationKind == .jobCommand })
+        XCTAssertTrue(try store.pendingOutbox(sender: .phone).contains { $0.mutationKind == .userDelete && $0.recordID == proposal.id.uuidString })
+    }
+
+    func testCurrentProgramRemovalArchivesItAndProtectsAnActiveWorkout() throws {
+        let store = try HealthCoachStore(inMemory: true)
+        let exercise = ProgramExercise(exerciseID: "push_up", displayName: "Push-up", order: 0, sets: 2, minimumReps: 5, maximumReps: 10)
+        let proposal = TrainingProgram(
+            name: "Synthetic current",
+            goalSummary: "Strength",
+            days: [TrainingDay(name: "Day A", order: 0, exercises: [exercise])],
+            equipment: []
+        )
+        try store.saveProgram(proposal)
+        let current = try store.acceptProgram(proposal)
+        _ = try store.startSession(program: current, localDate: "2026-09-18")
+
+        XCTAssertThrowsError(try store.archiveCurrentProgram())
+        _ = try store.finishSession(id: try XCTUnwrap(store.workouts().first?.id))
+        let archived = try store.archiveCurrentProgram()
+
+        XCTAssertEqual(archived.status, .archived)
+        XCTAssertNil(try store.currentProgram())
+        XCTAssertEqual(try store.workouts().count, 1)
+    }
+
+    func testRejectProgramArchivesProposalWithoutChangingCurrentProgram() throws {
+        let store = try HealthCoachStore(inMemory: true)
+        let exercise = ProgramExercise(exerciseID: "push_up", displayName: "Push-up", order: 0, sets: 2, minimumReps: 5, maximumReps: 10)
+        let proposal = TrainingProgram(
+            name: "Synthetic proposal",
+            goalSummary: "Strength",
+            days: [TrainingDay(name: "Day A", order: 0, exercises: [exercise])],
+            equipment: []
+        )
+        try store.saveProgram(proposal)
+
+        let rejected = try store.rejectProgram(proposal)
+
+        XCTAssertEqual(rejected.status, .archived)
+        XCTAssertNil(try store.currentProgram())
+        XCTAssertEqual(try store.programs().first?.status, .archived)
+        XCTAssertTrue(try store.pendingOutbox(sender: .phone).contains { $0.mutationKind == .userUpsert && $0.recordID == proposal.id.uuidString })
+    }
+
+    func testProgramsMayReuseExerciseAcrossDaysButNotWithinOneDay() throws {
+        let exercise = ProgramExercise(exerciseID: "push_up", displayName: "Push-up", order: 0, sets: 3, minimumReps: 8, maximumReps: 15)
+        let program = TrainingProgram(
+            name: "Repeated movement",
+            goalSummary: "Strength",
+            days: [
+                TrainingDay(name: "Day A", order: 0, exercises: [exercise]),
+                TrainingDay(name: "Day B", order: 1, exercises: [exercise])
+            ],
+            equipment: []
+        )
+        XCTAssertNoThrow(try program.validate(excludedEquipment: []))
+
+        var duplicate = exercise
+        duplicate.order = 1
+        let invalid = TrainingProgram(
+            name: "Duplicate movement",
+            goalSummary: "Strength",
+            days: [TrainingDay(name: "Day A", order: 0, exercises: [exercise, duplicate])],
+            equipment: []
+        )
+        XCTAssertThrowsError(try invalid.validate(excludedEquipment: []))
+    }
+
+    #if os(macOS)
+    func testExhaustedJobIsDeadLetteredBeforeDispatch() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let store = try HealthCoachStore(path: fixture.databaseURL)
+        let meal = try store.saveMeal(Meal(localDate: "2026-09-16", originalText: "synthetic exhausted job"), enqueueAnalysis: false)
+        let job = try store.createJob(kind: .analyzeMeal, request: JobRequest(mealID: meal.id), inputRevision: meal.revision, sourceRevision: meal.revision)
+        let reason = "synthetic retry limit"
+        try store.recordMacExecutionUpdate(JobExecutionUpdate(
+            jobID: job.id,
+            generation: job.requestGeneration,
+            sourceRevision: job.sourceRevision,
+            status: .running,
+            attempts: CodexJobWorker.maxAttempts,
+            errorMessage: reason
+        ))
+        let worker = CodexJobWorker(
+            store: store,
+            codexExecutableURL: URL(fileURLWithPath: "/bin/false"),
+            mcpExecutableURL: URL(fileURLWithPath: "/bin/false"),
+            workRoot: fixture.directoryURL
+        )
+
+        do {
+            try await worker.run(jobID: job.id)
+            XCTFail("An exhausted job should not dispatch a new turn.")
+        } catch {
+            // The durable status is the assertion; no external process should
+            // be needed once the retry limit has been reached.
+        }
+
+        let deadLettered = try XCTUnwrap(store.job(id: job.id))
+        XCTAssertEqual(deadLettered.status, .deadLettered)
+        XCTAssertEqual(deadLettered.attempts, CodexJobWorker.maxAttempts)
+        XCTAssertEqual(deadLettered.errorMessage, reason)
+    }
+    #endif
+
     func testMealTextRevisionInvalidatesOlderEstimateAndQueuesFreshAnalysis() throws {
         let store = try HealthCoachStore(inMemory: true)
         let meal = try store.saveMeal(Meal(localDate: "2026-09-16", originalText: "oats"), enqueueAnalysis: false)
@@ -726,6 +1112,30 @@ final class HealthCoachKitTests: XCTestCase {
         let effectiveTools = await client.effectiveMCPTools()
         XCTAssertEqual(Set(effectiveTools), HealthCoachMCPToolCatalog.nameSet)
         await client.stop()
+    }
+
+    func testCodexAppServerMatchesNestedTurnIDCompletionPayload() throws {
+        let completedTurn = try XCTUnwrap(matchingCompletedTurn(
+            from: [
+                "threadId": "fake-thread",
+                "turn": [
+                    "id": "fake-turn",
+                    "status": "completed",
+                    "items": [["type": "agentMessage", "text": "synthetic completion"]]
+                ]
+            ],
+            threadID: "fake-thread",
+            turnID: "fake-turn"
+        ))
+        XCTAssertEqual(completedTurn["id"] as? String, "fake-turn")
+        XCTAssertNil(matchingCompletedTurn(
+            from: [
+                "threadId": "fake-thread",
+                "turn": ["id": "other-turn"]
+            ],
+            threadID: "fake-thread",
+            turnID: "fake-turn"
+        ))
     }
 
     func testMCPHelperInitializesListsToolsAndReadsOnlyFromSnapshot() throws {

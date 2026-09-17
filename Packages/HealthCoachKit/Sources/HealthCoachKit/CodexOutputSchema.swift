@@ -44,6 +44,20 @@ public enum HealthCoachOutputSchema {
             "type": "object", "additionalProperties": false, "required": ["id", "revision", "name", "goalSummary", "days", "equipment", "status", "sourceJobID", "sourceModel", "generatedAt", "acceptedAt", "inputRevision", "updatedAt"],
             "properties": ["id": ["type": "string", "format": "uuid"], "revision": ["type": "integer", "minimum": 1], "name": ["type": "string"], "goalSummary": ["type": "string"], "days": ["type": "array", "items": day], "equipment": ["type": "array", "items": ["type": "string"]], "status": ["type": "string", "enum": ["proposed", "current", "archived"]], "sourceJobID": ["type": ["string", "null"]], "sourceModel": ["type": ["string", "null"]], "generatedAt": ["type": "string", "format": "date-time"], "acceptedAt": ["type": ["string", "null"]], "inputRevision": ["type": "integer", "minimum": 1], "updatedAt": ["type": "string", "format": "date-time"]]
         ]
+        let equipmentDiscovery: [String: Any] = [
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["facilityType", "facilityName", "detectedEquipment", "confidenceByEquipment", "rationale", "sources", "limitations"],
+            "properties": [
+                "facilityType": ["type": ["string", "null"], "enum": ["standardGym", "smallGym", "mediumGym", "homeNoEquipment", "homeLimitedEquipment", NSNull()]],
+                "facilityName": ["type": ["string", "null"]],
+                "detectedEquipment": ["type": "array", "items": ["type": "string"]],
+                "confidenceByEquipment": ["type": "object", "additionalProperties": ["type": "number", "minimum": 0, "maximum": 1]],
+                "rationale": ["type": "string"],
+                "sources": ["type": "array", "items": ["type": "string"]],
+                "limitations": ["type": "array", "items": ["type": "string"]]
+            ]
+        ]
         let progression: [String: Any] = [
             "type": "object", "additionalProperties": false, "required": ["exerciseID", "sourceSessionID", "sourceSessionRevision", "suggestedLoadKg", "suggestedMinimumReps", "suggestedMaximumReps", "rationale", "assumptions"],
             "properties": ["exerciseID": ["type": "string"], "sourceSessionID": ["type": "string", "format": "uuid"], "sourceSessionRevision": ["type": "integer", "minimum": 1], "suggestedLoadKg": ["type": ["number", "null"], "minimum": 0], "suggestedMinimumReps": ["type": ["integer", "null"], "minimum": 1], "suggestedMaximumReps": ["type": ["integer", "null"], "minimum": 1], "rationale": ["type": "string"], "assumptions": ["type": "array", "items": ["type": "string"]]]
@@ -57,10 +71,10 @@ public enum HealthCoachOutputSchema {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "type": "object",
             "additionalProperties": false,
-            "required": ["kind", "meal", "program", "progression", "coaching"],
+            "required": ["kind", "meal", "program", "equipment", "progression", "coaching"],
             "properties": [
                 "kind": ["type": "string", "enum": JobKind.allCases.map(\.rawValue)],
-                "meal": meal, "program": program, "progression": progression, "coaching": coaching
+                "meal": meal, "program": program, "equipment": equipmentDiscovery, "progression": progression, "coaching": coaching
             ]
         ]
         return try JSONSerialization.data(withJSONObject: schema, options: [.sortedKeys])

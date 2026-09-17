@@ -17,9 +17,9 @@ enum PhoneSyncService {
         let deadline = Date().addingTimeInterval(max(duration, 0.5))
         while Date() < deadline {
             if await coordinator.isAuthenticated(), await coordinator.isQuiescent() {
-                // Leave a short settling window for the peer's final batch or
-                // acknowledgment before closing this foreground sync.
-                try await Task.sleep(nanoseconds: 150_000_000)
+                // SyncSessionCoordinator keeps a short remote-activity settle
+                // window so a Mac result batch can be applied and acknowledged
+                // before this foreground connection closes.
                 if await coordinator.isQuiescent() { break }
             } else {
                 try await Task.sleep(nanoseconds: 50_000_000)

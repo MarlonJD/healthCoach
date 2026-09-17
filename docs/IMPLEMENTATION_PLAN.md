@@ -57,12 +57,12 @@ Persist these small typed domains:
 
 | Domain | Contents |
 | --- | --- |
-| Profile and goals | Current/target weight, optional body-fat target, experience, days/week, session duration, schedule constraints, exercise preferences |
-| Measurements | Weight, waist, optional body fat; timestamp, unit, source, external ID for imported records |
+| Profile and goals | Primary goal, current/target weight and body-fat targets, target timeframe, training experience and break history, days/week, session duration, schedule constraints, exercise preferences |
+| Measurements | Weight, waist, and body fat; timestamp, unit, source, external ID for imported records |
 | Meals | Original text, date, revisions, analysis status; per-item estimates, totals, ranges, assumptions, and user corrections |
 | Training | Completed sessions and sets (exercise, reps, load, optional RIR/RPE), accepted current program, pending proposed programs |
 | Exercise library | Stable canonical IDs, display names, equipment, alternatives; grows from validated programs rather than a seeded catalog |
-| Equipment | User-editable available equipment and exclusions |
+| Equipment | User-editable available equipment/exclusions, facility type/name, bounded reference photos, and optional public-lookup consent |
 | Health summaries | Steps, active energy, sleep, resting HR, HRV, imported workout summaries and measurement references; source/freshness metadata |
 | Corrections | Record-specific corrections and explicit reusable preferences, with original and corrected values |
 | Coach jobs/results | Job ID, kind, input revision, status, attempts, request context version, output, errors, and acknowledgment |
@@ -97,9 +97,13 @@ Keep one reconnect loop with cancellation and capped backoff. Reconnect triggers
 
 ## 5. Durable Codex jobs
 
-The queue is persisted, not an in-memory array. Job kinds: `analyzeMeal`, `generateProgram`, `suggestProgression`, and `answerQuestion`. Exercise alternatives are required within generated programs and may also be requested through a coaching question. Questions can be captured offline.
+The queue is persisted, not an in-memory array. Job kinds: `analyzeMeal`, `generateProgram`, `discoverEquipment`, `suggestProgression`, and `answerQuestion`. Exercise alternatives are required within generated programs and may also be requested through a coaching question. Questions can be captured offline.
 
-Keep one Mac worker and one active turn initially. Job states: queued, running, succeeded, failed, and cancelled; receiving/sync acknowledgment is tracked separately. The phone assigns a request generation, increments it on explicit retry, and owns cancellation intent. Mac execution events echo the generation and source revision. Reject events/results for a cancelled/deleted request or older generation regardless of arrival order; late `running`/`succeeded` status cannot override phone intent. The Mac interrupts a known turn when cancellation arrives. Persist attempts, thread/turn references where supported, and the request's source revision. On interruption, resolve known turn state when possible; otherwise allow a bounded retry. Back off transient failures, leave auth/network failures pending with a reason, and stop repeated schema failures after a small limit with a retry action.
+Keep one Mac worker with bounded two-turn concurrency. Job states include queued, running, succeeded, failed, dead-lettered, and cancelled; receiving/sync acknowledgment is tracked separately. The phone assigns a request generation, increments it on explicit retry, and owns cancellation intent. Mac execution events echo the generation and source revision. Reject events/results for a cancelled/deleted request or older generation regardless of arrival order; late `running`/`succeeded` status cannot override phone intent. Delayed phone commands from the same generation must not rewind newer Mac-owned execution state or results. The Mac interrupts only the active turns whose cancellation intent arrived. Persist attempts, thread/turn references where supported, and the request's source revision. On interruption, resolve known turn state when possible; otherwise retry transient failures with capped backoff. Terminal validation failures and exhausted retries enter the durable dead-letter state with their reason and a manual retry action.
+
+The paired Mac keeps a lightweight durable queue monitor running while the companion is active. It wakes the bounded worker after sync commits and polls for jobs created while another batch is running, so queue progress does not depend on a one-time startup or an already-open socket. Each job status/result commit wakes an open reverse-sync session immediately; otherwise the Mac outbox retains it for the next phone foreground sync.
+
+Active `generateProgram` and `discoverEquipment` requests are deduplicated transactionally. The first program request is gated on goal, measurements, target timeframe, training background, and facility type; an exact equipment list is optional and can be discovered later from text/photos or an explicitly enabled public lookup. The iPhone Training screen shows one latest request, opens a full proposal detail view with explicit accept/reject actions and a local change summary, and exposes cancel/retry actions. Text and image changes to an accepted program create a replacement proposal; a successful generated program remains a proposal until it is delivered to and accepted by the iPhone. Removing a current program archives it without deleting workout history.
 
 Pausing analysis gates new phone submissions immediately and queues a versioned policy update/cancellation intent for pending work. The Mac checks its latest acknowledged policy before dispatch. If disconnected, show that pause is waiting to reach the Mac: jobs already delivered there may run until the pause is received. The Mac has an immediate local pause control too. Do not imply that disconnected revocation is instantaneous or that already transmitted model data can be recalled.
 
@@ -140,7 +144,7 @@ Exercise IDs are stable lower_snake_case identifiers, checked for collisions and
 
 ## 7. HealthKit normalization
 
-On iPhone, read only the requested optional types: steps, active energy, sleep, workouts, resting heart rate, HRV SDNN, body mass, and body-fat percentage. The iPhone does not write HealthKit samples. The Watch workout companion separately requests permission for the workout type and heart-rate/active-energy reads, then saves only the workout explicitly started by the user through the system workout builder. It does not write custom HealthKit quantity samples. Store waist manually. Request permissions in context and keep manual features usable without them. An empty read cannot reliably distinguish denied access from no data; show “unavailable/no data,” not a fabricated permission diagnosis or zero.
+On iPhone, read only the requested optional types: steps, active energy, sleep, workouts, resting heart rate, HRV SDNN, body mass, and body-fat percentage. When explicitly requested, write analyzed meal nutrition as per-meal energy/protein/carbohydrate/fat samples and export completed iPhone-only strength sessions as `traditionalStrengthTraining` workouts without invented energy. The Watch workout companion separately requests permission for the workout type and heart-rate/active-energy reads, then saves only the workout explicitly started by the user through the live workout builder; the iPhone must not duplicate a Watch-recorded workout. Store waist manually. Request permissions in context and keep manual features usable without them. An empty read cannot reliably distinguish denied access from no data; show “unavailable/no data,” not a fabricated permission diagnosis or zero.
 
 Use HealthKit statistics APIs for cumulative daily steps/energy and suitable averages for resting HR/HRV. Do not sum raw Watch and phone sample streams yourself. Preserve units and source/freshness metadata. For sleep, exclude in-bed/awake durations and merge overlapping asleep intervals before counting; handle midnight and time-zone boundaries explicitly. Imported workouts and measurements have stable HealthKit IDs for import deduplication. Keep HealthKit activity/workout totals and manually logged strength-session totals separately labeled; do not add them together or guess that matching timestamps identify one session. For daily weight, use the latest manual measurement for that day when present, otherwise the latest HealthKit measurement; keep all original records and show the chosen source. This deterministic source precedence avoids counting the same weight twice without claiming to identify cross-source duplicates.
 
@@ -154,7 +158,7 @@ Daily data carries the day interval and aggregation time zone. Define 7-day weig
 
 - **Today:** quick meal capture, automatic HealthKit weight when available, deterministic daily totals and 7-day weight trend, HealthKit summaries, sync status, and pending count. Daily body-measurement fields are intentionally absent.
 - **Meals:** text capture, history, pending/error states, estimated result with range/assumptions, and correction editing.
-- **Training:** current accepted program, cached alternatives, session/set logger, history, equipment settings, new-program and progression requests. Logging works offline.
+- **Training:** required first-program setup, current accepted program, cached alternatives, session/set logger, history, equipment settings, proposal detail/accept/reject, text-based program revisions, current-program removal, and progression requests. Logging works offline.
 - **Coach:** question entry, queued questions, received answers/proposals, accept a proposed program.
 - **Settings:** profile/goals/preferences, occasional Body measurements check-ins, HealthKit access, pairing/unpair, Codex-analysis disclosure/control, sync now.
 

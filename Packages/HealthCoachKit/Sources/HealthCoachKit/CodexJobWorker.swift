@@ -14,12 +14,15 @@ public struct JobWorkerOutcome: Equatable, Sendable {
 }
 
 public actor CodexJobWorker {
+    public static let maxConcurrentJobs = 2
+    public static let maxAttempts = 3
+
     private let store: HealthCoachStore
     private let codexExecutableURL: URL
     private let mcpExecutableURL: URL
     private let workRoot: URL
-    private var activeClient: CodexAppServerClient?
-    private var activeJobID: UUID?
+    private var activeClients: [UUID: CodexAppServerClient] = [:]
+    private var activeJobIDs: Set<UUID> = []
 
     public init(store: HealthCoachStore, codexExecutableURL: URL, mcpExecutableURL: URL, workRoot: URL) {
         self.store = store
@@ -28,28 +31,70 @@ public actor CodexJobWorker {
         self.workRoot = workRoot
     }
 
-    public func runPending() async -> [JobWorkerOutcome] {
+    public func runPending(onJobChange: (@MainActor @Sendable () async -> Void)? = nil) async -> [JobWorkerOutcome] {
         let pending = (try? store.pendingJobs()) ?? []
+        guard !pending.isEmpty else { return [] }
+
         var outcomes: [JobWorkerOutcome] = []
-        for job in pending {
-            do {
-                try await run(jobID: job.id)
-                outcomes.append(JobWorkerOutcome(jobID: job.id, status: .succeeded))
-            } catch {
-                let status = (try? store.job(id: job.id)?.status) ?? .failed
-                outcomes.append(JobWorkerOutcome(jobID: job.id, status: status, message: error.localizedDescription))
+        for start in stride(from: 0, to: pending.count, by: Self.maxConcurrentJobs) {
+            let end = min(start + Self.maxConcurrentJobs, pending.count)
+            let batch = Array(pending[start..<end])
+            let batchOutcomes = await withTaskGroup(of: JobWorkerOutcome.self, returning: [JobWorkerOutcome].self) { group in
+                for job in batch {
+                    group.addTask { await self.runOutcome(jobID: job.id, onJobChange: onJobChange) }
+                }
+                var values: [JobWorkerOutcome] = []
+                for await outcome in group {
+                    values.append(outcome)
+                }
+                return values
             }
+            outcomes.append(contentsOf: batchOutcomes)
         }
         return outcomes
     }
 
     public func run(jobID: UUID) async throws {
+        try await run(jobID: jobID, onJobChange: nil)
+    }
+
+    private func runOutcome(jobID: UUID, onJobChange: (@MainActor @Sendable () async -> Void)?) async -> JobWorkerOutcome {
+        do {
+            try await run(jobID: jobID, onJobChange: onJobChange)
+            return JobWorkerOutcome(jobID: jobID, status: .succeeded)
+        } catch {
+            let status = (try? store.job(id: jobID)?.status) ?? .deadLettered
+            return JobWorkerOutcome(jobID: jobID, status: status, message: error.localizedDescription)
+        }
+    }
+
+    private func run(jobID: UUID, onJobChange: (@MainActor @Sendable () async -> Void)?) async throws {
         guard let initialJob = try store.job(id: jobID) else { throw HealthCoachError.invalidInput("The job does not exist.") }
         guard initialJob.intent == .active, initialJob.status == .queued || initialJob.status == .running else {
             throw HealthCoachError.cancelled
         }
         guard try store.analysisPolicy().enabled else {
             throw HealthCoachError.unavailable("Analysis is paused on the iPhone.")
+        }
+
+        if initialJob.attempts >= Self.maxAttempts {
+            let reason = initialJob.errorMessage ?? "The maximum retry attempts were exhausted."
+            try store.recordMacExecutionUpdate(JobExecutionUpdate(
+                jobID: initialJob.id,
+                generation: initialJob.requestGeneration,
+                sourceRevision: initialJob.sourceRevision,
+                status: .deadLettered,
+                attempts: initialJob.attempts,
+                errorMessage: reason
+            ))
+            await onJobChange?()
+            throw HealthCoachError.invalidOutput(reason)
+        }
+
+        activeJobIDs.insert(jobID)
+        defer {
+            activeJobIDs.remove(jobID)
+            activeClients.removeValue(forKey: jobID)
         }
 
         let attempts = initialJob.attempts + 1
@@ -62,11 +107,12 @@ public actor CodexJobWorker {
                 attempts: attempts
             )
         )
+        await onJobChange?()
+        guard try store.job(id: jobID)?.intent == .active else { throw HealthCoachError.cancelled }
 
         let jobDirectory = workRoot.appendingPathComponent("job-" + jobID.uuidString, isDirectory: true)
         let snapshotURL = jobDirectory.appendingPathComponent("context.sqlite")
         var client: CodexAppServerClient?
-        activeJobID = jobID
         do {
             try FileManager.default.createDirectory(at: jobDirectory, withIntermediateDirectories: true)
             let artifact = try store.captureJobSnapshot(for: initialJob, at: snapshotURL)
@@ -74,11 +120,13 @@ public actor CodexJobWorker {
                 executableURL: codexExecutableURL,
                 mcpExecutableURL: mcpExecutableURL,
                 snapshotURL: artifact.path,
-                workingDirectory: jobDirectory
+                workingDirectory: jobDirectory,
+                allowedMCPTools: initialJob.kind == .discoverEquipment ? [] : HealthCoachMCPToolCatalog.nameSet,
+                networkAccess: initialJob.kind == .discoverEquipment && initialJob.request.allowsOnlineLookup == true
             )
             let newClient = CodexAppServerClient(configuration: configuration)
             client = newClient
-            activeClient = newClient
+            activeClients[jobID] = newClient
             try await newClient.start()
             let turn = try await withTimeout(seconds: 300, onTimeout: {
                 await newClient.stop()
@@ -86,7 +134,10 @@ public actor CodexJobWorker {
                 try await newClient.runTurn(
                     prompt: HealthCoachJobPrompt.make(for: initialJob),
                     outputSchema: try HealthCoachOutputSchema.jobOutput(),
-                    developerInstructions: "HealthCoach jobs may use only the required read-only HealthCoach MCP tools. Do not execute commands, edit files, browse the web, or call any other MCP server."
+                    developerInstructions: initialJob.kind == .discoverEquipment
+                        ? "This is an equipment discovery job. Do not access HealthCoach MCP tools or health records. Public web lookup is allowed only when the request explicitly sets allowsOnlineLookup=true. Return only structured equipment findings; do not make purchases, contact the venue, or change files."
+                        : "HealthCoach jobs may use only the required read-only HealthCoach MCP tools. Do not execute commands, edit files, browse the web, or call any other MCP server.",
+                    imageData: initialJob.request.referenceImageData ?? []
                 )
             }
             try store.recordMacExecutionUpdate(
@@ -100,6 +151,7 @@ public actor CodexJobWorker {
                     turnID: turn.turnID
                 )
             )
+            await onJobChange?()
             let output = try decodeOutput(turn.assistantText, for: initialJob)
             let result = JobResultEnvelope(
                 jobID: initialJob.id,
@@ -112,23 +164,20 @@ public actor CodexJobWorker {
                 sourceModel: configuration.modelID
             )
             try store.recordMacResult(result)
+            await onJobChange?()
             await newClient.stop()
             cleanup(jobDirectory)
-            activeClient = nil
-            activeJobID = nil
         } catch {
             if let client { await client.stop() }
             cleanup(jobDirectory)
-            activeClient = nil
-            activeJobID = nil
             let latest = try? store.job(id: jobID)
             let status: JobStatus
             if latest?.intent == .cancelRequested || error is CancellationError || error.localizedDescription == HealthCoachError.cancelled.localizedDescription {
                 status = .cancelled
-            } else if isTransient(error) {
+            } else if isTransient(error) && attempts < Self.maxAttempts {
                 status = .queued
             } else {
-                status = .failed
+                status = .deadLettered
             }
             try? store.recordMacExecutionUpdate(
                 JobExecutionUpdate(
@@ -140,21 +189,25 @@ public actor CodexJobWorker {
                     errorMessage: safeErrorMessage(error)
                 )
             )
+            await onJobChange?()
             throw error
         }
     }
 
-    public func cancelActiveJob() async {
-        await activeClient?.cancelActiveTurn()
+    public func activeJobsNeedingCancellation() -> [UUID] {
+        activeJobIDs.filter { jobID in
+            do {
+                guard let job = try store.job(id: jobID) else { return false }
+                return job.intent == .cancelRequested && job.status != .succeeded
+            } catch {
+                return false
+            }
+        }.sorted { $0.uuidString < $1.uuidString }
     }
 
-    public func activeJobNeedsCancellation() -> Bool {
-        guard let activeJobID else { return false }
-        do {
-            guard let job = try store.job(id: activeJobID) else { return false }
-            return job.intent == .cancelRequested && job.status != .succeeded
-        } catch {
-            return false
+    public func cancelActiveJobs(_ jobIDs: [UUID]) async {
+        for jobID in jobIDs {
+            await activeClients[jobID]?.cancelActiveTurn()
         }
     }
 
@@ -183,6 +236,10 @@ public actor CodexJobWorker {
                   program.inputRevision == job.inputRevision,
                   program.days.allSatisfy({ $0.exercises.allSatisfy { !$0.alternatives.isEmpty } }) else {
                 throw HealthCoachError.invalidOutput("Every generated exercise must carry a cached alternative.")
+            }
+        case .discoverEquipment:
+            guard output.equipment != nil else {
+                throw HealthCoachError.invalidOutput("Equipment discovery result is missing.")
             }
         case .suggestProgression:
             guard let progression = output.progression, progression.sourceSessionID == job.request.sessionID else {

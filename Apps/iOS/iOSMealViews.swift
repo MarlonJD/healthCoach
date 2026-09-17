@@ -108,6 +108,17 @@ struct MealDetailView: View {
                     MacroLine(label: "Fat", value: analysis.totals.fatGrams, unit: "g")
                     Text("Range: \(Int(analysis.kcalRange.lowKcal))–\(Int(analysis.kcalRange.highKcal)) kcal")
                     ForEach(analysis.assumptions, id: \.self) { Text("• \($0)").font(.footnote) }
+                    Button("Add nutrition to Apple Health") {
+                        model.exportMealNutritionToHealthKit(meal)
+                    }
+                    Text("HealthCoach writes one meal sample for energy, protein, carbohydrates, and fat. Apple Health can include those samples in the day's totals.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    if let message = model.healthKitNutritionMessage {
+                        Text(message)
+                            .font(.footnote)
+                            .foregroundStyle(message.hasPrefix("Added") ? .green : .secondary)
+                    }
                     Button("Correct nutrition") {
                         correctionKcal = String(Int(analysis.totals.kcal.rounded()))
                         correctionProtein = String(Int(analysis.totals.proteinGrams.rounded()))

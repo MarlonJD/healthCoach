@@ -26,6 +26,8 @@
 	<string>HealthCoach uses the camera only to scan a short-lived Mac pairing QR code.</string>
 	<key>NSHealthShareUsageDescription</key>
 	<string>HealthCoach reads selected activity, sleep, body-mass, heart-rate, and HRV metrics to show normalized summaries.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>HealthCoach can add confirmed meal nutrition and completed strength workouts to Apple Health when you choose to export them.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>HealthCoach connects to your paired Mac on the local network for sync and coaching jobs.</string>
 	<key>UIBackgroundModes</key>

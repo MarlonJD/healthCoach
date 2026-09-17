@@ -1,5 +1,6 @@
 import SwiftUI
 import HealthCoachKit
+import PhotosUI
 
 struct CoachView: View {
     @ObservedObject var model: iOSAppModel
@@ -48,8 +49,9 @@ private struct JobRow: View {
             HStack {
                 Text(job.kind.rawValue).font(.headline)
                 Spacer()
-                Text(job.status.rawValue.capitalized).foregroundStyle(job.status == .failed ? .red : .secondary)
+                Text(jobStatusTitle(job.status)).foregroundStyle(job.status == .failed || job.status == .deadLettered ? .red : .secondary)
             }
+            if job.attempts > 0 { Text("Attempts: \(job.attempts)").font(.caption).foregroundStyle(.secondary) }
             if let question = job.request.question { Text(question).lineLimit(3) }
             if let error = job.errorMessage { Text(error).font(.footnote).foregroundStyle(.red) }
             if let answer = job.result?.output.coaching {
@@ -59,18 +61,32 @@ private struct JobRow: View {
             if let progression = job.result?.output.progression {
                 Text("\(progression.exerciseID): \(progression.rationale)")
             }
+            if let discovery = job.result?.output.equipment {
+                if !discovery.detectedEquipment.isEmpty {
+                    Text("Detected equipment: " + discovery.detectedEquipment.joined(separator: ", "))
+                }
+                Text(discovery.rationale)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
             HStack {
                 if job.status == .queued || job.status == .running { Button("Cancel") { model.cancel(job) } }
-                if job.status == .failed || job.status == .cancelled || job.executionStatus == .stale { Button("Retry") { model.retry(job) } }
+                if job.status == .failed || job.status == .deadLettered || job.status == .cancelled || job.executionStatus == .stale { Button("Retry") { model.retry(job) } }
             }
             .font(.footnote)
         }
+    }
+
+    private func jobStatusTitle(_ status: JobStatus) -> String {
+        status == .deadLettered ? "Dead-lettered" : status.rawValue.capitalized
     }
 }
 
 struct SettingsView: View {
     @ObservedObject var model: iOSAppModel
     @State private var displayName = ""
+    @State private var trainingExperienceMonths = ""
+    @State private var recentBreakWeeks = ""
     @State private var daysPerWeek = "3"
     @State private var duration = "45"
     @State private var constraints = ""
@@ -78,8 +94,17 @@ struct SettingsView: View {
     @State private var targetWeight = ""
     @State private var targetBodyFat = ""
     @State private var targetWaist = ""
+    @State private var currentWeight = ""
+    @State private var primaryGoal = ""
+    @State private var targetTimeframeWeeks = ""
     @State private var availableEquipment = ""
     @State private var excludedEquipment = ""
+    @State private var facilityType: EquipmentFacilityType = .standardGym
+    @State private var facilityName = ""
+    @State private var allowOnlineLookup = false
+    @State private var selectedEquipmentPhotoItems: [PhotosPickerItem] = []
+    @State private var referencePhotos: [Data] = []
+    @State private var isLoadingEquipmentPhotos = false
 
     var body: some View {
         Form {
@@ -96,9 +121,11 @@ struct SettingsView: View {
             }
             Section("Profile") {
                 TextField("Display name", text: $displayName)
-                Picker("Experience", selection: Binding(get: { model.profile.experience }, set: { model.saveProfile(displayName: displayName, experience: $0, daysPerWeek: Int(daysPerWeek) ?? 3, duration: Int(duration) ?? 45, constraints: constraints, preferences: split(preferences)) })) {
+                Picker("Experience", selection: Binding(get: { model.profile.experience }, set: { model.saveProfile(displayName: displayName, experience: $0, daysPerWeek: Int(daysPerWeek) ?? 3, duration: Int(duration) ?? 45, constraints: constraints, preferences: split(preferences), trainingExperienceMonths: Int(trainingExperienceMonths), recentBreakWeeks: Int(recentBreakWeeks)) })) {
                     ForEach(ExperienceLevel.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
                 }
+                TextField("Training experience (months)", text: $trainingExperienceMonths).keyboardType(.numberPad)
+                TextField("Recent break (weeks; 0 if none)", text: $recentBreakWeeks).keyboardType(.numberPad)
                 TextField("Days per week", text: $daysPerWeek).keyboardType(.numberPad)
                 TextField("Session minutes", text: $duration).keyboardType(.numberPad)
                 TextField("Schedule constraints", text: $constraints, axis: .vertical)
@@ -109,10 +136,13 @@ struct SettingsView: View {
                 Text("These are target values, not daily measurements.")
                     .font(.footnote)
                     .foregroundStyle(HealthCoachPalette.secondaryInk)
+                TextField("Primary goal", text: $primaryGoal)
+                TextField("Current weight kg", text: $currentWeight).keyboardType(.decimalPad)
                 TextField("Target weight kg", text: $targetWeight).keyboardType(.decimalPad)
                 TextField("Target body fat %", text: $targetBodyFat).keyboardType(.decimalPad)
                 TextField("Target waist cm", text: $targetWaist).keyboardType(.decimalPad)
-                Button("Save targets") { saveGoals() }
+                TextField("Target timeframe (weeks)", text: $targetTimeframeWeeks).keyboardType(.numberPad)
+                Button("Save goals") { saveGoals() }
             }
             Section("Body data") {
                 NavigationLink {
@@ -125,9 +155,32 @@ struct SettingsView: View {
                     .foregroundStyle(HealthCoachPalette.secondaryInk)
             }
             Section("Equipment") {
+                Picker("Space type", selection: $facilityType) {
+                    ForEach(EquipmentFacilityType.allCases, id: \.self) { type in
+                        Text(type.displayName).tag(type)
+                    }
+                }
+                LabeledContent("Gym/facility name") {
+                    TextField("Optional", text: $facilityName)
+                }
                 TextField("Available, comma separated", text: $availableEquipment)
                 TextField("Excluded, comma separated", text: $excludedEquipment)
-                Button("Save equipment") { model.saveEquipment(available: split(availableEquipment), excluded: split(excludedEquipment)) }
+                PhotosPicker(
+                    selection: $selectedEquipmentPhotoItems,
+                    maxSelectionCount: HealthCoachConstants.maximumEquipmentPhotos,
+                    matching: .images
+                ) {
+                    Label("Add gym photos", systemImage: "photo.on.rectangle.angled")
+                }
+                if isLoadingEquipmentPhotos {
+                    ProgressView("Preparing photos…")
+                } else if !referencePhotos.isEmpty {
+                    Text("\(referencePhotos.count) reference photo(s) ready.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                Toggle("Allow public web lookup for this facility", isOn: $allowOnlineLookup)
+                Button("Save equipment") { saveEquipment() }
             }
             Section("HealthKit") {
                 Text("HealthCoach reads only the requested HealthKit metrics. Missing data stays unavailable instead of becoming a made-up zero.")
@@ -154,27 +207,69 @@ struct SettingsView: View {
         .background(HealthCoachPalette.canvas)
         .tint(HealthCoachPalette.indigo)
         .onAppear(perform: load)
+        .onChange(of: selectedEquipmentPhotoItems) { _, items in
+            Task { await loadEquipmentPhotos(items) }
+        }
     }
 
     private func load() {
         displayName = model.profile.displayName
+        trainingExperienceMonths = model.profile.trainingExperienceMonths.map(String.init) ?? ""
+        recentBreakWeeks = model.profile.recentBreakWeeks.map(String.init) ?? ""
         daysPerWeek = String(model.profile.daysPerWeek)
         duration = String(model.profile.sessionDurationMinutes)
         constraints = model.profile.scheduleConstraints
         preferences = model.profile.exercisePreferences.joined(separator: ", ")
-        targetWeight = model.goals.targetWeightKg.map { String($0) } ?? ""
-        targetBodyFat = model.goals.targetBodyFatPercent.map { String($0) } ?? ""
-        targetWaist = model.goals.targetWaistCm.map { String($0) } ?? ""
+        primaryGoal = model.goals.primaryGoal ?? ""
+        currentWeight = model.goals.currentWeightKg.map { healthCoachDecimal($0) } ?? ""
+        targetWeight = model.goals.targetWeightKg.map { healthCoachDecimal($0) } ?? ""
+        targetBodyFat = model.goals.targetBodyFatPercent.map { healthCoachDecimal($0) } ?? ""
+        targetWaist = model.goals.targetWaistCm.map { healthCoachDecimal($0) } ?? ""
+        targetTimeframeWeeks = model.goals.targetTimeframeWeeks.map(String.init) ?? ""
         availableEquipment = model.equipment.available.joined(separator: ", ")
         excludedEquipment = model.equipment.excluded.joined(separator: ", ")
+        facilityType = model.equipment.facilityType ?? .standardGym
+        facilityName = model.equipment.facilityName ?? ""
+        allowOnlineLookup = model.equipment.onlineLookupAllowed ?? false
+        referencePhotos = model.equipment.referencePhotos ?? []
     }
 
     private func saveProfile() {
-        model.saveProfile(displayName: displayName, experience: model.profile.experience, daysPerWeek: Int(daysPerWeek) ?? 3, duration: Int(duration) ?? 45, constraints: constraints, preferences: split(preferences))
+        model.saveProfile(displayName: displayName, experience: model.profile.experience, daysPerWeek: Int(daysPerWeek) ?? 3, duration: Int(duration) ?? 45, constraints: constraints, preferences: split(preferences), trainingExperienceMonths: Int(trainingExperienceMonths), recentBreakWeeks: Int(recentBreakWeeks))
     }
 
     private func saveGoals() {
-        model.saveGoals(currentWeight: model.goals.currentWeightKg, targetWeight: Double(targetWeight), bodyFat: Double(targetBodyFat), waist: Double(targetWaist))
+        model.saveGoals(currentWeight: healthCoachDouble(currentWeight), targetWeight: healthCoachDouble(targetWeight), bodyFat: healthCoachDouble(targetBodyFat), waist: healthCoachDouble(targetWaist), primaryGoal: primaryGoal, timeframeWeeks: Int(targetTimeframeWeeks))
+    }
+
+    private func saveEquipment() {
+        let available = split(availableEquipment)
+        model.saveEquipment(
+            available: available,
+            excluded: split(excludedEquipment),
+            facilityType: facilityType,
+            facilityName: facilityName,
+            referencePhotos: referencePhotos,
+            onlineLookupAllowed: allowOnlineLookup
+        )
+        model.requestEquipmentDiscovery(
+            facilityType: facilityType,
+            facilityName: facilityName,
+            referencePhotos: referencePhotos,
+            allowsOnlineLookup: allowOnlineLookup
+        )
+    }
+
+    private func loadEquipmentPhotos(_ items: [PhotosPickerItem]) async {
+        isLoadingEquipmentPhotos = true
+        var loaded: [Data] = []
+        for item in items.prefix(HealthCoachConstants.maximumEquipmentPhotos) {
+            guard let data = try? await item.loadTransferable(type: Data.self),
+                  let compressed = healthCoachCompressedJPEG(data) else { continue }
+            loaded.append(compressed)
+        }
+        referencePhotos = loaded
+        isLoadingEquipmentPhotos = false
     }
 
     private func split(_ value: String) -> [String] {
@@ -244,7 +339,7 @@ struct BodyMeasurementsView: View {
                         .foregroundStyle(HealthCoachPalette.secondaryInk)
                     if let current {
                         HStack(alignment: .lastTextBaseline, spacing: 5) {
-                            Text(String(format: "%.1f", current.value))
+                            Text(healthCoachDecimal(current.value))
                                 .font(.system(size: 30, weight: .bold, design: .rounded))
                                 .monospacedDigit()
                             Text(current.unit)
@@ -292,7 +387,7 @@ struct BodyMeasurementsView: View {
                                     .foregroundStyle(HealthCoachPalette.secondaryInk)
                             }
                             Spacer()
-                            Text(String(format: "%.1f %@", measurement.value, measurement.unit))
+                            Text("\(healthCoachDecimal(measurement.value)) \(measurement.unit)")
                                 .font(.subheadline.weight(.semibold))
                                 .monospacedDigit()
                             if measurement.source == .manual {

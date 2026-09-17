@@ -462,6 +462,50 @@ public final class HealthCoachStore: @unchecked Sendable {
         }
     }
 
+    @discardableResult
+    public func archiveCurrentProgram() throws -> TrainingProgram {
+        try database.write { db in
+            let programRows = try Row.fetchAll(db, sql: "SELECT payload FROM entity_records WHERE entity_type = ? AND deleted_at IS NULL", arguments: [EntityType.trainingProgram.rawValue])
+            guard let current = programRows.compactMap({ try? decodeRow(TrainingProgram.self, row: $0) }).first(where: { $0.status == .current }) else {
+                throw HealthCoachError.invalidInput("There is no current program to remove.")
+            }
+            let activeSessions = try Row.fetchAll(db, sql: "SELECT payload FROM entity_records WHERE entity_type = ? AND deleted_at IS NULL", arguments: [EntityType.workoutSession.rawValue])
+                .compactMap { try? decodeRow(WorkoutSession.self, row: $0) }
+            guard !activeSessions.contains(where: { $0.status == .active && $0.programID == current.id }) else {
+                throw HealthCoachError.invalidInput("Finish the active workout before removing the current program.")
+            }
+
+            var archived = current
+            archived.status = .archived
+            archived.updatedAt = Date()
+            let payload = try HealthCoachJSON.encode(archived)
+            let watermark = try incrementWatermark(db)
+            _ = try putEntity(
+                db: db,
+                entityType: .trainingProgram,
+                recordID: archived.id.uuidString,
+                owner: .phone,
+                revision: archived.revision,
+                updatedAt: archived.updatedAt,
+                deletedAt: nil,
+                payload: payload,
+                requireNewer: false
+            )
+            try enqueueMutation(
+                db,
+                sender: .phone,
+                kind: .userUpsert,
+                entityType: .trainingProgram,
+                recordID: archived.id.uuidString,
+                owner: .phone,
+                sourceRevision: archived.revision,
+                payload: payload,
+                sourceWatermark: watermark
+            )
+            return archived
+        }
+    }
+
     public func programs(includeDeleted: Bool = false) throws -> [TrainingProgram] {
         try list(.trainingProgram, includeDeleted: includeDeleted)
     }
@@ -508,7 +552,9 @@ public final class HealthCoachStore: @unchecked Sendable {
             }
             let currentRows = try Row.fetchAll(db, sql: "SELECT payload FROM entity_records WHERE entity_type = ? AND deleted_at IS NULL", arguments: [EntityType.trainingProgram.rawValue])
             for row in currentRows {
-                guard var current = try? decodeRow(TrainingProgram.self, row: row), current.status == .current, current.id != proposed.id else { continue }
+                guard var current = try? decodeRow(TrainingProgram.self, row: row),
+                      (current.status == .current || current.status == .proposed),
+                      current.id != proposed.id else { continue }
                 current.status = .archived
                 current.updatedAt = Date()
                 let payload = try HealthCoachJSON.encode(current)
@@ -529,11 +575,57 @@ public final class HealthCoachStore: @unchecked Sendable {
         }
     }
 
+    @discardableResult
+    public func rejectProgram(_ proposed: TrainingProgram) throws -> TrainingProgram {
+        try database.write { db in
+            guard let stored: TrainingProgram = try read(.trainingProgram, id: proposed.id.uuidString, db: db),
+                  sameTrainingProgramContent(stored, proposed),
+                  stored.status == .proposed else {
+                throw HealthCoachError.staleRevision
+            }
+            var rejected = stored
+            rejected.status = .archived
+            rejected.updatedAt = Date()
+            let payload = try HealthCoachJSON.encode(rejected)
+            let watermark = try incrementWatermark(db)
+            _ = try putEntity(
+                db: db,
+                entityType: .trainingProgram,
+                recordID: rejected.id.uuidString,
+                owner: .phone,
+                revision: rejected.revision,
+                updatedAt: rejected.updatedAt,
+                deletedAt: nil,
+                payload: payload,
+                requireNewer: false
+            )
+            try enqueueMutation(
+                db,
+                sender: .phone,
+                kind: .userUpsert,
+                entityType: .trainingProgram,
+                recordID: rejected.id.uuidString,
+                owner: .phone,
+                sourceRevision: rejected.revision,
+                payload: payload,
+                sourceWatermark: watermark
+            )
+            return rejected
+        }
+    }
+
     public func equipment() throws -> EquipmentProfile? {
         try read(.equipment, id: "equipment")
     }
 
     public func saveEquipment(_ equipment: EquipmentProfile) throws {
+        if let photos = equipment.referencePhotos {
+            guard photos.count <= HealthCoachConstants.maximumEquipmentPhotos,
+                  photos.allSatisfy({ $0.count <= HealthCoachConstants.maximumEquipmentPhotoBytes }),
+                  photos.reduce(0, { $0 + $1.count }) <= HealthCoachConstants.maximumEquipmentPhotoPayloadBytes else {
+                throw HealthCoachError.frameTooLarge(HealthCoachConstants.maximumEquipmentPhotoPayloadBytes + 1)
+            }
+        }
         var equipment = equipment
         if let current = try self.equipment(), current.revision >= equipment.revision {
             equipment.revision = current.revision + 1
@@ -646,6 +738,111 @@ public final class HealthCoachStore: @unchecked Sendable {
         }
     }
 
+    /// Moves failures written by older builds into the durable dead-letter
+    /// state without losing their reason or attempt count.
+    @discardableResult
+    public func normalizeFailedJobsToDeadLetters() throws -> Int {
+        try database.write { db in
+            let rows = try Row.fetchAll(db, sql: "SELECT payload FROM entity_records WHERE entity_type = ?", arguments: [EntityType.job.rawValue])
+            var normalized = 0
+            for row in rows {
+                var job = try decodeRow(CoachJob.self, row: row)
+                guard job.status == .failed else { continue }
+                job.status = .deadLettered
+                job.executionStatus = .deadLettered
+                job.errorMessage = job.errorMessage ?? "The job failed in an earlier worker build."
+                job.updatedAt = Date()
+                let payload = try HealthCoachJSON.encode(job)
+                _ = try putEntity(
+                    db: db,
+                    entityType: .job,
+                    recordID: job.id.uuidString,
+                    owner: .mac,
+                    revision: job.inputRevision,
+                    updatedAt: job.updatedAt,
+                    deletedAt: nil,
+                    payload: payload,
+                    requireNewer: false
+                )
+                let watermark = try incrementWatermark(db)
+                try enqueueMutation(
+                    db,
+                    sender: .mac,
+                    kind: .jobStatus,
+                    entityType: .job,
+                    recordID: job.id.uuidString,
+                    owner: .mac,
+                    sourceRevision: job.sourceRevision,
+                    payload: try HealthCoachJSON.encode(JobExecutionUpdate(
+                        jobID: job.id,
+                        generation: job.requestGeneration,
+                        sourceRevision: job.sourceRevision,
+                        status: .deadLettered,
+                        attempts: job.attempts,
+                        errorMessage: job.errorMessage,
+                        updatedAt: job.updatedAt
+                    )),
+                    sourceWatermark: watermark
+                )
+                normalized += 1
+            }
+            return normalized
+        }
+    }
+
+    /// Requeues jobs that were marked running by a Mac process that stopped
+    /// before it could record a terminal result.
+    @discardableResult
+    public func recoverInterruptedJobs() throws -> Int {
+        try database.write { db in
+            let rows = try Row.fetchAll(db, sql: "SELECT payload FROM entity_records WHERE entity_type = ?", arguments: [EntityType.job.rawValue])
+            var recovered = 0
+            for row in rows {
+                var job = try decodeRow(CoachJob.self, row: row)
+                guard job.status == .running, job.intent == .active else { continue }
+                job.status = .queued
+                job.executionStatus = .notDelivered
+                job.errorMessage = nil
+                job.threadID = nil
+                job.turnID = nil
+                job.updatedAt = Date()
+                let payload = try HealthCoachJSON.encode(job)
+                _ = try putEntity(
+                    db: db,
+                    entityType: .job,
+                    recordID: job.id.uuidString,
+                    owner: .mac,
+                    revision: job.inputRevision,
+                    updatedAt: job.updatedAt,
+                    deletedAt: nil,
+                    payload: payload,
+                    requireNewer: false
+                )
+                let watermark = try incrementWatermark(db)
+                try enqueueMutation(
+                    db,
+                    sender: .mac,
+                    kind: .jobStatus,
+                    entityType: .job,
+                    recordID: job.id.uuidString,
+                    owner: .mac,
+                    sourceRevision: job.sourceRevision,
+                    payload: try HealthCoachJSON.encode(JobExecutionUpdate(
+                        jobID: job.id,
+                        generation: job.requestGeneration,
+                        sourceRevision: job.sourceRevision,
+                        status: .queued,
+                        attempts: job.attempts,
+                        updatedAt: job.updatedAt
+                    )),
+                    sourceWatermark: watermark
+                )
+                recovered += 1
+            }
+            return recovered
+        }
+    }
+
     public func pendingJobs() throws -> [CoachJob] {
         try jobs().filter { $0.status == .queued || $0.status == .running }
     }
@@ -654,7 +851,117 @@ public final class HealthCoachStore: @unchecked Sendable {
     public func createJob(kind: JobKind, request: JobRequest, inputRevision: Int, sourceRevision: Int? = nil) throws -> CoachJob {
         guard try analysisPolicy().enabled else { throw HealthCoachError.unavailable("Analysis is paused on the iPhone.") }
         return try database.write { db in
-            try makeJob(db, kind: kind, request: request, inputRevision: inputRevision, sourceRevision: sourceRevision)
+            if kind == .generateProgram || kind == .discoverEquipment {
+                let rows = try Row.fetchAll(db, sql: "SELECT payload FROM entity_records WHERE entity_type = ?", arguments: [EntityType.job.rawValue])
+                let existingJobs: [CoachJob] = rows.compactMap { row in
+                    try? decodeRow(CoachJob.self, row: row)
+                }
+                if let existing = existingJobs.first(where: { job in
+                    job.kind == kind && job.intent == .active && (job.status == .queued || job.status == .running)
+                }) {
+                    return existing
+                }
+            }
+            return try makeJob(db, kind: kind, request: request, inputRevision: inputRevision, sourceRevision: sourceRevision)
+        }
+    }
+
+    /// Keeps one active complete-program request when an older app version
+    /// already created duplicates. The extra requests remain visible in the
+    /// request history and can be retried individually.
+    @discardableResult
+    public func deduplicateActiveProgramJobs() throws -> Int {
+        try database.write { db in
+            let rows = try Row.fetchAll(db, sql: "SELECT payload FROM entity_records WHERE entity_type = ?", arguments: [EntityType.job.rawValue])
+            var active: [CoachJob] = rows.compactMap { row in
+                try? decodeRow(CoachJob.self, row: row)
+            }
+            .filter { job in
+                job.kind == .generateProgram && job.intent == .active && (job.status == .queued || job.status == .running)
+            }
+            active.sort { lhs, rhs in
+                let lhsRunning = lhs.status == .running
+                let rhsRunning = rhs.status == .running
+                if lhsRunning != rhsRunning { return lhsRunning }
+                if lhs.createdAt != rhs.createdAt { return lhs.createdAt < rhs.createdAt }
+                return lhs.id.uuidString < rhs.id.uuidString
+            }
+
+            guard active.count > 1 else { return 0 }
+            var cancelled = 0
+            for var job in active.dropFirst() {
+                job.intent = .cancelRequested
+                job.status = .cancelled
+                job.executionStatus = .notDelivered
+                job.errorMessage = "Superseded by another active program request."
+                job.updatedAt = Date()
+                try writePhoneJobCommand(db: db, job: job)
+                cancelled += 1
+            }
+            return cancelled
+        }
+    }
+
+    /// Clears the old complete-program request state while leaving an
+    /// accepted/current program and all workout history intact. Active jobs
+    /// are cancelled before their local records are removed so the Mac worker
+    /// also stops work that was already delivered.
+    @discardableResult
+    public func resetProgramRequests() throws -> Int {
+        try database.write { db in
+            let jobRows = try Row.fetchAll(db, sql: "SELECT payload FROM entity_records WHERE entity_type = ?", arguments: [EntityType.job.rawValue])
+            let programJobs = jobRows.compactMap { row in
+                try? decodeRow(CoachJob.self, row: row)
+            }
+            .filter { $0.kind == .generateProgram }
+            let programJobIDs = Set(programJobs.map(\.id))
+
+            let programRows = try Row.fetchAll(db, sql: "SELECT payload FROM entity_records WHERE entity_type = ?", arguments: [EntityType.trainingProgram.rawValue])
+            let proposedPrograms = programRows.compactMap { row in
+                try? decodeRow(TrainingProgram.self, row: row)
+            }
+            .filter { program in
+                program.status == .proposed && (program.sourceJobID == nil || programJobIDs.contains(program.sourceJobID!))
+            }
+
+            var cleared = 0
+            for job in programJobs {
+                if job.intent == .active, (job.status == .queued || job.status == .running) {
+                    var cancellation = job
+                    cancellation.intent = .cancelRequested
+                    cancellation.status = .cancelled
+                    cancellation.executionStatus = .notDelivered
+                    cancellation.errorMessage = "Cleared by the user."
+                    cancellation.updatedAt = Date()
+                    try writePhoneJobCommand(db: db, job: cancellation)
+                }
+                try db.execute(
+                    sql: "DELETE FROM entity_records WHERE entity_type = ? AND id = ?",
+                    arguments: [EntityType.job.rawValue, job.id.uuidString]
+                )
+                cleared += 1
+            }
+
+            for program in proposedPrograms {
+                let watermark = try incrementWatermark(db)
+                try enqueueMutation(
+                    db,
+                    sender: .phone,
+                    kind: .userDelete,
+                    entityType: .trainingProgram,
+                    recordID: program.id.uuidString,
+                    owner: .phone,
+                    sourceRevision: program.revision,
+                    payload: try HealthCoachJSON.encode(program),
+                    sourceWatermark: watermark
+                )
+                try db.execute(
+                    sql: "DELETE FROM entity_records WHERE entity_type = ? AND id = ?",
+                    arguments: [EntityType.trainingProgram.rawValue, program.id.uuidString]
+                )
+                cleared += 1
+            }
+            return cleared
         }
     }
 
@@ -1214,14 +1521,25 @@ public final class HealthCoachStore: @unchecked Sendable {
 
     private func writePhoneJobCommand(_ job: CoachJob) throws {
         try database.write { db in
-            let payload = try HealthCoachJSON.encode(job)
-            let watermark = try incrementWatermark(db)
-            _ = try putEntity(db: db, entityType: .job, recordID: job.id.uuidString, owner: .phone, revision: job.inputRevision, updatedAt: job.updatedAt, deletedAt: nil, payload: payload, requireNewer: false)
-            try enqueueMutation(db, sender: .phone, kind: .jobCommand, entityType: .job, recordID: job.id.uuidString, owner: .phone, sourceRevision: job.sourceRevision, payload: payload, sourceWatermark: watermark)
+            try writePhoneJobCommand(db: db, job: job)
         }
     }
 
+    private func writePhoneJobCommand(db: Database, job: CoachJob) throws {
+        let payload = try HealthCoachJSON.encode(job)
+        let watermark = try incrementWatermark(db)
+        _ = try putEntity(db: db, entityType: .job, recordID: job.id.uuidString, owner: .phone, revision: job.inputRevision, updatedAt: job.updatedAt, deletedAt: nil, payload: payload, requireNewer: false)
+        try enqueueMutation(db, sender: .phone, kind: .jobCommand, entityType: .job, recordID: job.id.uuidString, owner: .phone, sourceRevision: job.sourceRevision, payload: payload, sourceWatermark: watermark)
+    }
+
     private func makeJob(_ db: Database, kind: JobKind, request: JobRequest, inputRevision: Int, sourceRevision: Int?) throws -> CoachJob {
+        if let photos = request.referenceImageData {
+            guard photos.count <= HealthCoachConstants.maximumEquipmentPhotos,
+                  photos.allSatisfy({ $0.count <= HealthCoachConstants.maximumEquipmentPhotoBytes }),
+                  photos.reduce(0, { $0 + $1.count }) <= HealthCoachConstants.maximumEquipmentPhotoPayloadBytes else {
+                throw HealthCoachError.frameTooLarge(HealthCoachConstants.maximumEquipmentPhotoPayloadBytes + 1)
+            }
+        }
         let job = CoachJob(kind: kind, request: request, inputRevision: inputRevision, sourceRevision: sourceRevision)
         let payload = try HealthCoachJSON.encode(job)
         let watermark = try incrementWatermark(db)
@@ -1383,7 +1701,7 @@ public final class HealthCoachStore: @unchecked Sendable {
                 requireNewer: type != .trainingProgram
             )
         case .jobCommand:
-            let job = try HealthCoachJSON.decode(CoachJob.self, from: mutation.payload)
+            var job = try HealthCoachJSON.decode(CoachJob.self, from: mutation.payload)
             guard mutation.entityType == .job, mutation.recordID == job.id.uuidString, mutation.owner == .phone else { throw HealthCoachError.wrongOwner }
             if let current: CoachJob = try read(.job, id: job.id.uuidString, db: db) {
                 guard job.requestGeneration >= current.requestGeneration else { return }
@@ -1392,8 +1710,39 @@ public final class HealthCoachStore: @unchecked Sendable {
                    job.intent != .cancelRequested {
                     return
                 }
+                if job.requestGeneration > current.requestGeneration {
+                    // A newer generation is an explicit phone retry. Its
+                    // request is authoritative, but its copied execution
+                    // fields are not; the Mac must dispatch it as new work.
+                    let isCancellation = job.intent == .cancelRequested
+                    job.status = isCancellation ? .cancelled : .queued
+                    job.executionStatus = .notDelivered
+                    job.attempts = 0
+                    job.context = nil
+                    job.result = nil
+                    job.errorMessage = isCancellation ? job.errorMessage : nil
+                    job.threadID = nil
+                    job.turnID = nil
+                } else {
+                    // The phone owns the request and cancellation intent, but
+                    // the Mac owns execution state and results. A delayed
+                    // phone command from the original queue must not rewind a
+                    // newer Mac result back to queued or erase its payload.
+                    let isCancellation = job.intent == .cancelRequested
+                    let currentStatus = current.status == .failed ? .deadLettered : current.status
+                    job.status = isCancellation && current.status != .succeeded ? .cancelled : currentStatus
+                    job.executionStatus = currentStatus == .deadLettered ? .deadLettered : current.executionStatus
+                    job.attempts = current.attempts
+                    job.context = current.context
+                    job.result = current.result
+                    job.resultHistory = current.resultHistory
+                    job.errorMessage = isCancellation ? job.errorMessage : current.errorMessage
+                    job.threadID = current.threadID
+                    job.turnID = current.turnID
+                    job.updatedAt = max(job.updatedAt, current.updatedAt)
+                }
             }
-            _ = try putEntity(db: db, entityType: .job, recordID: job.id.uuidString, owner: .phone, revision: job.inputRevision, updatedAt: job.updatedAt, deletedAt: nil, payload: mutation.payload, requireNewer: false)
+            _ = try putEntity(db: db, entityType: .job, recordID: job.id.uuidString, owner: .phone, revision: job.inputRevision, updatedAt: job.updatedAt, deletedAt: nil, payload: try HealthCoachJSON.encode(job), requireNewer: false)
         case .jobStatus:
             let update = try HealthCoachJSON.decode(JobExecutionUpdate.self, from: mutation.payload)
             guard mutation.entityType == .job, mutation.recordID == update.jobID.uuidString, mutation.owner == .mac else { throw HealthCoachError.wrongOwner }
@@ -1420,7 +1769,7 @@ public final class HealthCoachStore: @unchecked Sendable {
             return
         }
         job.status = update.status
-        job.executionStatus = .delivered
+        job.executionStatus = update.status == .deadLettered ? .deadLettered : .delivered
         job.attempts = max(job.attempts, update.attempts)
         job.threadID = update.threadID ?? job.threadID
         job.turnID = update.turnID ?? job.turnID
@@ -1447,6 +1796,8 @@ public final class HealthCoachStore: @unchecked Sendable {
             let currentMeal: Meal? = try read(.meal, id: meal.sourceMealID.uuidString, db: db)
             sourceIsCurrent = currentMeal?.revision == meal.sourceMealRevision
         case .generateProgram:
+            sourceIsCurrent = true
+        case .discoverEquipment:
             sourceIsCurrent = true
         case .suggestProgression:
             guard let progression = result.output.progression else { return }
@@ -1496,10 +1847,58 @@ public final class HealthCoachStore: @unchecked Sendable {
             _ = try putEntity(db: db, entityType: .meal, recordID: meal.id.uuidString, owner: .phone, revision: meal.revision, updatedAt: meal.updatedAt, deletedAt: nil, payload: try HealthCoachJSON.encode(meal), requireNewer: false)
         case .generateProgram:
             guard var program = output.program else { return }
+            let existingRows = try Row.fetchAll(db, sql: "SELECT payload FROM entity_records WHERE entity_type = ?", arguments: [EntityType.trainingProgram.rawValue])
+            for row in existingRows {
+                guard var existing = try? decodeRow(TrainingProgram.self, row: row),
+                      existing.status == .proposed,
+                      existing.id != program.id else { continue }
+                existing.status = .archived
+                existing.updatedAt = Date()
+                _ = try putEntity(
+                    db: db,
+                    entityType: .trainingProgram,
+                    recordID: existing.id.uuidString,
+                    owner: .phone,
+                    revision: existing.revision,
+                    updatedAt: existing.updatedAt,
+                    deletedAt: nil,
+                    payload: try HealthCoachJSON.encode(existing),
+                    requireNewer: false
+                )
+            }
             program.status = .proposed
             program.sourceJobID = job.id
             _ = try putEntity(db: db, entityType: .trainingProgram, recordID: program.id.uuidString, owner: .phone, revision: program.revision, updatedAt: program.updatedAt, deletedAt: nil, payload: try HealthCoachJSON.encode(program), requireNewer: false)
             try upsertExerciseLibrary(db: db, program: program, enqueue: false)
+        case .discoverEquipment:
+            guard let discovery = output.equipment else { return }
+            var profile = try read(.equipment, id: "equipment", db: db) ?? EquipmentProfile()
+            if let facilityType = discovery.facilityType { profile.facilityType = facilityType }
+            if let facilityName = discovery.facilityName?.trimmingCharacters(in: .whitespacesAndNewlines), !facilityName.isEmpty {
+                profile.facilityName = facilityName
+            }
+            var available = profile.available
+            for item in discovery.detectedEquipment {
+                let normalized = item.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !normalized.isEmpty,
+                      !available.contains(where: { $0.caseInsensitiveCompare(normalized) == .orderedSame }) else { continue }
+                available.append(normalized)
+            }
+            if profile.facilityType == .homeNoEquipment { available = ["bodyweight"] }
+            profile.available = available
+            profile.revision += 1
+            profile.updatedAt = Date()
+            _ = try putEntity(
+                db: db,
+                entityType: .equipment,
+                recordID: "equipment",
+                owner: .phone,
+                revision: profile.revision,
+                updatedAt: profile.updatedAt,
+                deletedAt: nil,
+                payload: try HealthCoachJSON.encode(profile),
+                requireNewer: false
+            )
         case .suggestProgression, .answerQuestion:
             break
         }

@@ -2,6 +2,19 @@ import Foundation
 import SwiftUI
 import HealthCoachKit
 
+func healthCoachDecimal(_ value: Double, fractionDigits: Int = 1) -> String {
+    let formatter = NumberFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.numberStyle = .decimal
+    formatter.minimumFractionDigits = 0
+    formatter.maximumFractionDigits = fractionDigits
+    return formatter.string(from: NSNumber(value: value)) ?? value.description
+}
+
+func healthCoachDouble(_ text: String) -> Double? {
+    Double(text.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: "."))
+}
+
 enum PhoneSyncStatus: Equatable {
     case unpaired
     case pairing
@@ -32,6 +45,8 @@ final class iOSAppModel: ObservableObject {
     private var automaticSyncTask: Task<Void, Never>?
     #if canImport(HealthKit)
     private var healthKitReader: HealthKitReader?
+    private var healthKitNutritionWriter: HealthKitNutritionWriter?
+    private var healthKitWorkoutWriter: HealthKitWorkoutWriter?
     #endif
 
     @Published private(set) var meals: [Meal] = []
@@ -49,6 +64,8 @@ final class iOSAppModel: ObservableObject {
     @Published private(set) var lastError: String?
     @Published private(set) var watchLastError: String?
     @Published private(set) var healthKitMessage: String?
+    @Published private(set) var healthKitNutritionMessage: String?
+    @Published private(set) var healthKitWorkoutMessage: String?
     @Published var showingPairingScanner = false
 
     init() {
@@ -89,9 +106,19 @@ final class iOSAppModel: ObservableObject {
         if let store {
             let reader = HealthKitReader()
             healthKitReader = reader
+            healthKitNutritionWriter = HealthKitNutritionWriter(healthStore: reader.healthStore)
+            healthKitWorkoutWriter = HealthKitWorkoutWriter(healthStore: reader.healthStore)
             reader.registerBackgroundObservers(store: store)
         }
         #endif
+        #if DEBUG
+        if CommandLine.arguments.contains("--reset-program-requests") {
+            do { _ = try store?.resetProgramRequests() }
+            catch { lastError = error.localizedDescription }
+        }
+        #endif
+        do { _ = try store?.deduplicateActiveProgramJobs() }
+        catch { lastError = error.localizedDescription }
         refresh()
         publishWatchSnapshot()
     }
@@ -136,6 +163,48 @@ final class iOSAppModel: ObservableObject {
         programs.first(where: { $0.status == .current })
     }
 
+    var programSetupMissingFields: [String] {
+        var missing: [String] = []
+        if goals.primaryGoal?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
+            missing.append("primary goal")
+        }
+        if !(currentMeasurementValue(for: .weight)?.isFinite ?? false) || (currentMeasurementValue(for: .weight) ?? 0) <= 0 {
+            missing.append("current weight")
+        }
+        if !(currentMeasurementValue(for: .bodyFat)?.isFinite ?? false) || !(0...100).contains(currentMeasurementValue(for: .bodyFat) ?? -1) {
+            missing.append("current body-fat percentage")
+        }
+        if !(currentMeasurementValue(for: .waist)?.isFinite ?? false) || (currentMeasurementValue(for: .waist) ?? 0) <= 0 {
+            missing.append("current waist")
+        }
+        if !(goals.targetWeightKg?.isFinite ?? false) || (goals.targetWeightKg ?? 0) <= 0 {
+            missing.append("target weight")
+        }
+        if !(goals.targetBodyFatPercent?.isFinite ?? false) || !(0...100).contains(goals.targetBodyFatPercent ?? -1) {
+            missing.append("target body-fat percentage")
+        }
+        if !(goals.targetTimeframeWeeks.map({ (1...520).contains($0) }) ?? false) {
+            missing.append("target timeframe")
+        }
+        if !(profile.trainingExperienceMonths.map({ $0 >= 0 }) ?? false) {
+            missing.append("training experience")
+        }
+        if !(profile.recentBreakWeeks.map({ $0 >= 0 }) ?? false) {
+            missing.append("recent training break")
+        }
+        if equipment.facilityType == nil {
+            missing.append("facility type")
+        }
+        return missing
+    }
+
+    func currentMeasurementValue(for kind: MeasurementKind) -> Double? {
+        measurements
+            .filter { $0.kind == kind && $0.value.isFinite && $0.value > 0 }
+            .max { $0.measuredAt < $1.measuredAt }?
+            .value
+    }
+
     var displayedTrainingProgram: TrainingProgram? {
         if let session = activeSession,
            let programID = session.programID,
@@ -147,7 +216,33 @@ final class iOSAppModel: ObservableObject {
     }
 
     var proposedPrograms: [TrainingProgram] {
-        programs.filter { $0.status == .proposed }
+        Array(
+            programs
+                .filter { $0.status == .proposed }
+                .sorted { $0.updatedAt > $1.updatedAt }
+                .prefix(1)
+        )
+    }
+
+    var programJobs: [CoachJob] {
+        jobs
+            .filter { $0.kind == .generateProgram }
+            .sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    var activeProgramJob: CoachJob? {
+        programJobs.first(where: { $0.status == .queued || $0.status == .running })
+    }
+
+    var activeEquipmentDiscoveryJob: CoachJob? {
+        jobs
+            .filter { $0.kind == .discoverEquipment }
+            .sorted { $0.updatedAt > $1.updatedAt }
+            .first(where: { $0.status == .queued || $0.status == .running })
+    }
+
+    var latestProgramJob: CoachJob? {
+        activeProgramJob ?? programJobs.first
     }
 
     var activeSession: WorkoutSession? {
@@ -320,12 +415,14 @@ final class iOSAppModel: ObservableObject {
         } catch { lastError = error.localizedDescription }
     }
 
-    func saveProfile(displayName: String, experience: ExperienceLevel, daysPerWeek: Int, duration: Int, constraints: String, preferences: [String]) {
+    func saveProfile(displayName: String, experience: ExperienceLevel, daysPerWeek: Int, duration: Int, constraints: String, preferences: [String], trainingExperienceMonths: Int? = nil, recentBreakWeeks: Int? = nil) {
         guard let store else { return }
         do {
             var value = profile
             value.displayName = displayName
             value.experience = experience
+            value.trainingExperienceMonths = trainingExperienceMonths
+            value.recentBreakWeeks = recentBreakWeeks
             value.daysPerWeek = daysPerWeek
             value.sessionDurationMinutes = duration
             value.scheduleConstraints = constraints
@@ -335,26 +432,52 @@ final class iOSAppModel: ObservableObject {
         } catch { lastError = error.localizedDescription }
     }
 
-    func saveGoals(currentWeight: Double?, targetWeight: Double?, bodyFat: Double?, waist: Double?) {
+    func saveGoals(currentWeight: Double?, targetWeight: Double?, bodyFat: Double?, waist: Double?, primaryGoal: String? = nil, timeframeWeeks: Int? = nil) {
         guard let store else { return }
         do {
             var value = goals
+            value.primaryGoal = primaryGoal?.trimmingCharacters(in: .whitespacesAndNewlines)
             value.currentWeightKg = currentWeight
             value.targetWeightKg = targetWeight
             value.targetBodyFatPercent = bodyFat
             value.targetWaistCm = waist
+            value.targetTimeframeWeeks = timeframeWeeks
             try store.saveGoals(value)
             refresh()
         } catch { lastError = error.localizedDescription }
     }
 
-    func saveEquipment(available: [String], excluded: [String]) {
+    func saveEquipment(available: [String], excluded: [String], facilityType: EquipmentFacilityType? = nil, facilityName: String? = nil, referencePhotos: [Data]? = nil, onlineLookupAllowed: Bool? = nil) {
         guard let store else { return }
         do {
             var value = equipment
             value.available = available
             value.excluded = excluded
+            if let facilityType { value.facilityType = facilityType }
+            if let facilityName { value.facilityName = facilityName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : facilityName.trimmingCharacters(in: .whitespacesAndNewlines) }
+            if let referencePhotos { value.referencePhotos = referencePhotos }
+            if let onlineLookupAllowed { value.onlineLookupAllowed = onlineLookupAllowed }
             try store.saveEquipment(value)
+            refresh()
+        } catch { lastError = error.localizedDescription }
+    }
+
+    func requestEquipmentDiscovery(facilityType: EquipmentFacilityType, facilityName: String?, referencePhotos: [Data], allowsOnlineLookup: Bool) {
+        guard let store else { return }
+        let trimmedName = facilityName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !referencePhotos.isEmpty || (allowsOnlineLookup && !(trimmedName?.isEmpty ?? true)) else { return }
+        do {
+            _ = try store.createJob(
+                kind: .discoverEquipment,
+                request: JobRequest(
+                    facilityType: facilityType,
+                    facilityName: trimmedName?.isEmpty == true ? nil : trimmedName,
+                    referenceImageData: referencePhotos,
+                    allowsOnlineLookup: allowsOnlineLookup
+                ),
+                inputRevision: max(profile.revision, goals.revision),
+                sourceRevision: equipment.revision
+            )
             refresh()
         } catch { lastError = error.localizedDescription }
     }
@@ -385,6 +508,50 @@ final class iOSAppModel: ObservableObject {
         #endif
     }
 
+    func exportMealNutritionToHealthKit(_ meal: Meal) {
+        #if canImport(HealthKit)
+        guard let analysis = meal.analysis else {
+            healthKitNutritionMessage = "This meal does not have a nutrition estimate yet."
+            return
+        }
+        let writer = healthKitNutritionWriter ?? HealthKitNutritionWriter()
+        healthKitNutritionWriter = writer
+        healthKitNutritionMessage = "Requesting Apple Health permission…"
+        Task { @MainActor [weak self] in
+            do {
+                try await writer.writeNutrition(for: meal, analysis: analysis)
+                self?.healthKitNutritionMessage = "Added this meal's calories and macros to Apple Health."
+            } catch {
+                self?.healthKitNutritionMessage = error.localizedDescription
+            }
+        }
+        #else
+        healthKitNutritionMessage = "Apple Health is unavailable on this build."
+        #endif
+    }
+
+    func exportWorkoutToHealthKit(_ session: WorkoutSession) {
+        #if canImport(HealthKit)
+        if session.liveMetrics != nil {
+            healthKitWorkoutMessage = "This session was recorded by Apple Watch; no duplicate iPhone workout was added."
+            return
+        }
+        let writer = healthKitWorkoutWriter ?? HealthKitWorkoutWriter()
+        healthKitWorkoutWriter = writer
+        healthKitWorkoutMessage = "Requesting Apple Health permission…"
+        Task { @MainActor [weak self] in
+            do {
+                _ = try await writer.writeManualWorkout(for: session)
+                self?.healthKitWorkoutMessage = "Added this strength workout to Apple Health. Active energy was unavailable on iPhone."
+            } catch {
+                self?.healthKitWorkoutMessage = error.localizedDescription
+            }
+        }
+        #else
+        healthKitWorkoutMessage = "Apple Health is unavailable on this build."
+        #endif
+    }
+
     func startWorkout() {
         guard let store else { return }
         do {
@@ -410,8 +577,22 @@ final class iOSAppModel: ObservableObject {
 
     func requestProgram() {
         guard let store else { return }
+        guard programSetupMissingFields.isEmpty else {
+            lastError = "Complete the program setup before requesting a plan."
+            return
+        }
         do {
-            _ = try store.createJob(kind: .generateProgram, request: JobRequest(), inputRevision: max(profile.revision, goals.revision), sourceRevision: currentProgram?.revision)
+            _ = try store.createJob(
+                kind: .generateProgram,
+                request: JobRequest(
+                    facilityType: equipment.facilityType,
+                    facilityName: equipment.facilityName,
+                    referenceImageData: equipment.referencePhotos,
+                    allowsOnlineLookup: false
+                ),
+                inputRevision: max(profile.revision, goals.revision),
+                sourceRevision: currentProgram?.revision
+            )
             refresh()
         } catch { lastError = error.localizedDescription }
     }
@@ -419,6 +600,42 @@ final class iOSAppModel: ObservableObject {
     func acceptProgram(_ program: TrainingProgram) {
         do { _ = try store?.acceptProgram(program); refresh() }
         catch { lastError = "Program changed before acceptance: \(error.localizedDescription)" }
+    }
+
+    func rejectProgram(_ program: TrainingProgram) {
+        do { _ = try store?.rejectProgram(program); refresh() }
+        catch { lastError = "Program changed before rejection: \(error.localizedDescription)" }
+    }
+
+    func removeCurrentProgram() {
+        do { _ = try store?.archiveCurrentProgram(); refresh() }
+        catch { lastError = error.localizedDescription }
+    }
+
+    func programJob(for program: TrainingProgram) -> CoachJob? {
+        guard let sourceJobID = program.sourceJobID else { return nil }
+        return jobs.first(where: { $0.id == sourceJobID })
+    }
+
+    func requestProgramModification(for program: TrainingProgram, question: String, referencePhotos: [Data] = []) {
+        let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let store, !trimmed.isEmpty else { return }
+        do {
+            _ = try store.createJob(
+                kind: .generateProgram,
+                request: JobRequest(
+                    programID: program.id,
+                    question: trimmed,
+                    facilityType: equipment.facilityType,
+                    facilityName: equipment.facilityName,
+                    referenceImageData: referencePhotos,
+                    allowsOnlineLookup: false
+                ),
+                inputRevision: max(profile.revision, goals.revision),
+                sourceRevision: program.revision
+            )
+            refresh()
+        } catch { lastError = error.localizedDescription }
     }
 
     func requestProgression(for exerciseID: String, session: WorkoutSession) {
@@ -445,6 +662,13 @@ final class iOSAppModel: ObservableObject {
     func retry(_ job: CoachJob) {
         do { _ = try store?.retryJob(id: job.id); refresh() }
         catch { lastError = error.localizedDescription }
+    }
+
+    func resetProgramRequests() {
+        do {
+            _ = try store?.resetProgramRequests()
+            refresh()
+        } catch { lastError = error.localizedDescription }
     }
 
     func pair(with data: Data) async {

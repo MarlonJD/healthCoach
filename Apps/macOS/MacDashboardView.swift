@@ -55,14 +55,28 @@ struct MacDashboardView: View {
                 GroupBox("Sync and jobs") {
                     VStack(alignment: .leading, spacing: 8) {
                         StatusRow(title: "Pending jobs", value: "\(model.jobs.filter { $0.status == .queued || $0.status == .running }.count)", systemImage: "clock")
+                        StatusRow(title: "Dead-lettered", value: "\(model.jobs.filter { $0.status == .deadLettered }.count)", systemImage: "exclamationmark.triangle")
+                        StatusRow(title: "Pending reverse sync", value: "\(model.pendingReverseSyncCount)", systemImage: "arrow.up.circle")
                         StatusRow(title: "Last sync", value: model.lastSyncAt.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "Not yet", systemImage: "arrow.triangle.2.circlepath")
-                        ForEach(model.jobs.prefix(12)) { job in
-                            HStack {
-                                Text(job.kind.rawValue)
-                                Spacer()
-                                Text(job.status.rawValue).foregroundStyle(.secondary)
+                        ScrollView(.vertical) {
+                            LazyVStack(alignment: .leading, spacing: 6) {
+                                ForEach(model.jobs.prefix(5)) { job in
+                                    HStack {
+                                        Text(job.kind.rawValue)
+                                        Spacer()
+                                        Text(jobStatusTitle(job.status)).foregroundStyle(.secondary)
+                                    }
+                                    .font(.footnote)
+                                }
                             }
-                            .font(.footnote)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 112)
+                        .scrollIndicators(.visible)
+                        .overlay {
+                            if model.jobs.isEmpty {
+                                Text("No jobs yet.").font(.footnote).foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }
@@ -77,6 +91,10 @@ struct MacDashboardView: View {
             }
             .padding(24)
         }
+    }
+
+    private func jobStatusTitle(_ status: JobStatus) -> String {
+        status == .deadLettered ? "Dead-lettered" : status.rawValue.capitalized
     }
 }
 

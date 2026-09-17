@@ -17,6 +17,15 @@ private struct MCPWorkoutRecord: Encodable {
     let sets: [TrainingSet]
 }
 
+private struct MCPEquipmentRecord: Encodable {
+    let available: [String]
+    let excluded: [String]
+    let facilityType: EquipmentFacilityType?
+    let facilityName: String?
+    let referencePhotoCount: Int
+    let onlineLookupAllowed: Bool?
+}
+
 private struct MCPPage<Record> {
     let records: [Record]
     let nextCursor: String?
@@ -83,7 +92,17 @@ private final class MCPReadService: @unchecked Sendable {
             return try encode(tool: name, units: ["sets": "count", "reps": "count", "targetRIR": "RIR"], records: value, missing: value == nil ? ["current program"] : [])
         case "get_equipment":
             let value = try store.equipment()
-            return try encode(tool: name, units: [:], records: value, missing: value == nil ? ["equipment"] : [])
+            let sanitized = value.map {
+                MCPEquipmentRecord(
+                    available: $0.available,
+                    excluded: $0.excluded,
+                    facilityType: $0.facilityType,
+                    facilityName: $0.facilityName,
+                    referencePhotoCount: $0.referencePhotos?.count ?? 0,
+                    onlineLookupAllowed: $0.onlineLookupAllowed
+                )
+            }
+            return try encode(tool: name, units: [:], records: sanitized, missing: sanitized == nil ? ["equipment"] : [])
         case "get_user_corrections":
             let page = try bounded(try store.corrections(), arguments: arguments) { correction in
                 ISO8601DateFormatter().string(from: correction.createdAt).prefix(10).description
