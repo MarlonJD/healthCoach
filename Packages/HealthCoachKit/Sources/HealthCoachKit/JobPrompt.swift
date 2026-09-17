@@ -25,7 +25,7 @@ public enum HealthCoachJobPrompt {
             requestData,
             "</untrusted-request>",
             tools,
-            "Keep the answer bounded to this job's read-only MCP snapshot. For meal analysis, include per-item estimates, a low/central/high kcal range, and assumptions. For programs, include ordered days, positive targets, stable lower_snake_case exercise IDs, equipment, progression text, and at least one cached alternative per exercise when an alternative is feasible. For coaching, cite local date ranges/record IDs and state limitations."
+            "Keep the answer bounded to this job's read-only MCP snapshot. Every schema property is required: emit null for an inapplicable optional value and include all five root keys (kind, meal, program, progression, coaching). For meal analysis, include per-item estimates, a low/central/high kcal range, and assumptions. For programs, include ordered days, positive targets, stable lower_snake_case exercise IDs, equipment, progression text, and at least one cached alternative per exercise when an alternative is feasible. For coaching, cite local date ranges/record IDs and state limitations."
         ].joined(separator: "\n")
     }
 }

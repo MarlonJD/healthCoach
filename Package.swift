@@ -21,6 +21,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/groue/GRDB.swift.git", exact: "7.11.1"),
+        .package(url: "https://github.com/apple/swift-log.git", exact: "1.15.1"),
         .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", exact: "0.12.1")
     ],
     targets: [
@@ -41,6 +42,7 @@ let package = Package(
             name: "HealthCoachMCP",
             dependencies: [
                 "HealthCoachKit",
+                .product(name: "Logging", package: "swift-log"),
                 .product(name: "MCP", package: "swift-sdk")
             ],
             path: "Packages/HealthCoachKit/Sources/HealthCoachMCP",

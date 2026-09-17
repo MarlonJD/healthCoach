@@ -29,6 +29,7 @@ final class iOSAppModel: ObservableObject {
     private let pairingStore: PairingCredentialStore
     private var watchBridge: PhoneWatchConnectivityBridge?
     private var syncTask: Task<Void, Never>?
+    private var automaticSyncTask: Task<Void, Never>?
     #if canImport(HealthKit)
     private var healthKitReader: HealthKitReader?
     #endif
@@ -97,6 +98,7 @@ final class iOSAppModel: ObservableObject {
 
     deinit {
         syncTask?.cancel()
+        automaticSyncTask?.cancel()
     }
 
     var today: String {
@@ -169,6 +171,37 @@ final class iOSAppModel: ObservableObject {
 
     func dismissError() {
         lastError = nil
+    }
+
+    func startAutomaticSync() {
+        guard automaticSyncTask == nil else {
+            syncNow()
+            return
+        }
+        syncNow()
+        automaticSyncTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(nanoseconds: 10_000_000_000)
+                } catch {
+                    return
+                }
+                guard let self, !Task.isCancelled else { return }
+                self.syncNow()
+            }
+        }
+    }
+
+    func stopAutomaticSync() {
+        automaticSyncTask?.cancel()
+        automaticSyncTask = nil
+    }
+
+    func analysisJob(for meal: Meal) -> CoachJob? {
+        jobs
+            .filter { $0.kind == .analyzeMeal && $0.request.mealID == meal.id }
+            .sorted { $0.requestGeneration > $1.requestGeneration }
+            .first
     }
 
     func refresh() {

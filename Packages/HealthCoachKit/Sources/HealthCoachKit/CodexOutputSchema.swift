@@ -33,7 +33,7 @@ public enum HealthCoachOutputSchema {
             "properties": ["exerciseID": ["type": "string"], "displayName": ["type": "string"], "equipment": ["type": "array", "items": ["type": "string"]], "reason": ["type": "string"]]
         ]
         let programExercise: [String: Any] = [
-            "type": "object", "additionalProperties": false, "required": ["exerciseID", "displayName", "order", "sets", "minimumReps", "maximumReps", "progressionText", "equipment", "alternatives"],
+            "type": "object", "additionalProperties": false, "required": ["exerciseID", "displayName", "order", "sets", "minimumReps", "maximumReps", "targetRIR", "targetRPE", "progressionText", "equipment", "alternatives"],
             "properties": ["exerciseID": ["type": "string"], "displayName": ["type": "string"], "order": ["type": "integer", "minimum": 0], "sets": ["type": "integer", "minimum": 1], "minimumReps": ["type": "integer", "minimum": 1], "maximumReps": ["type": "integer", "minimum": 1], "targetRIR": ["type": ["number", "null"]], "targetRPE": ["type": ["number", "null"]], "progressionText": ["type": "string"], "equipment": ["type": "array", "items": ["type": "string"]], "alternatives": ["type": "array", "items": alternative]]
         ]
         let day: [String: Any] = [
@@ -41,11 +41,11 @@ public enum HealthCoachOutputSchema {
             "properties": ["id": ["type": "string", "format": "uuid"], "name": ["type": "string"], "order": ["type": "integer", "minimum": 0], "exercises": ["type": "array", "items": programExercise]]
         ]
         let program: [String: Any] = [
-            "type": "object", "additionalProperties": false, "required": ["id", "revision", "name", "goalSummary", "days", "equipment", "status", "generatedAt", "inputRevision", "updatedAt"],
+            "type": "object", "additionalProperties": false, "required": ["id", "revision", "name", "goalSummary", "days", "equipment", "status", "sourceJobID", "sourceModel", "generatedAt", "acceptedAt", "inputRevision", "updatedAt"],
             "properties": ["id": ["type": "string", "format": "uuid"], "revision": ["type": "integer", "minimum": 1], "name": ["type": "string"], "goalSummary": ["type": "string"], "days": ["type": "array", "items": day], "equipment": ["type": "array", "items": ["type": "string"]], "status": ["type": "string", "enum": ["proposed", "current", "archived"]], "sourceJobID": ["type": ["string", "null"]], "sourceModel": ["type": ["string", "null"]], "generatedAt": ["type": "string", "format": "date-time"], "acceptedAt": ["type": ["string", "null"]], "inputRevision": ["type": "integer", "minimum": 1], "updatedAt": ["type": "string", "format": "date-time"]]
         ]
         let progression: [String: Any] = [
-            "type": "object", "additionalProperties": false, "required": ["exerciseID", "sourceSessionID", "sourceSessionRevision", "rationale", "assumptions"],
+            "type": "object", "additionalProperties": false, "required": ["exerciseID", "sourceSessionID", "sourceSessionRevision", "suggestedLoadKg", "suggestedMinimumReps", "suggestedMaximumReps", "rationale", "assumptions"],
             "properties": ["exerciseID": ["type": "string"], "sourceSessionID": ["type": "string", "format": "uuid"], "sourceSessionRevision": ["type": "integer", "minimum": 1], "suggestedLoadKg": ["type": ["number", "null"], "minimum": 0], "suggestedMinimumReps": ["type": ["integer", "null"], "minimum": 1], "suggestedMaximumReps": ["type": ["integer", "null"], "minimum": 1], "rationale": ["type": "string"], "assumptions": ["type": "array", "items": ["type": "string"]]]
         ]
         let suggestion: [String: Any] = ["type": "object", "additionalProperties": false, "required": ["title", "detail"], "properties": ["title": ["type": "string"], "detail": ["type": "string"]]]
@@ -57,7 +57,7 @@ public enum HealthCoachOutputSchema {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "type": "object",
             "additionalProperties": false,
-            "required": ["kind"],
+            "required": ["kind", "meal", "program", "progression", "coaching"],
             "properties": [
                 "kind": ["type": "string", "enum": JobKind.allCases.map(\.rawValue)],
                 "meal": meal, "program": program, "progression": progression, "coaching": coaching

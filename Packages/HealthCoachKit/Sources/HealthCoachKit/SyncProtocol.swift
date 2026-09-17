@@ -21,9 +21,17 @@ public struct LengthPrefixedFrameDecoder: Sendable {
                     ? HealthCoachError.frameTooLarge(Int(length))
                     : HealthCoachError.malformedFrame
             }
-            let total = 4 + Int(length)
+            let bodyLength = Int(length)
+            let total = 4 + bodyLength
             guard buffer.count >= total else { break }
-            frames.append(Data(buffer[4..<total]))
+            // Copy through collection operations instead of constructing a
+            // range from assumed integer indices. Network.framework may hand
+            // us a Data value whose slice indices are not zero-based; using
+            // dropFirst/prefix keeps the bounds tied to the actual collection
+            // and prevents a malformed peer frame from trapping the listener.
+            let body = Data(buffer.dropFirst(4).prefix(bodyLength))
+            guard body.count == bodyLength else { throw HealthCoachError.malformedFrame }
+            frames.append(body)
             buffer.removeFirst(total)
         }
         return frames
@@ -121,17 +129,67 @@ public protocol SyncByteTransport: Sendable {
 /// response is derived from durable cursors/outboxes, so a reconnect repeats
 /// safely instead of treating socket delivery as a commit.
 public enum SyncConnectionRunner {
+    private enum Event: Sendable {
+        case envelope(SyncEnvelope)
+        case localChange
+    }
+
     public static func run(
         transport: SyncByteTransport,
         coordinator: SyncSessionCoordinator,
-        onCommitted: (@MainActor @Sendable (SyncEnvelope) async -> Void)? = nil
+        onCommitted: (@MainActor @Sendable (SyncEnvelope) async -> Void)? = nil,
+        localChanges: AsyncStream<Void>? = nil
     ) async throws {
         try await transport.send(await coordinator.hello())
-        for try await envelope in transport.receive() {
-            let responses = try await coordinator.handle(envelope)
-            await onCommitted?(envelope)
-            for response in responses {
-                try await transport.send(response)
+        guard let localChanges else {
+            for try await envelope in transport.receive() {
+                let responses = try await coordinator.handle(envelope)
+                await onCommitted?(envelope)
+                for response in responses {
+                    try await transport.send(response)
+                }
+            }
+            return
+        }
+
+        // A peer may be connected while the local store commits a result or
+        // status update. Multiplex receive events and durable local-change
+        // signals, then serialize all coordinator reads and socket writes in
+        // this one loop so a push cannot race an acknowledgment.
+        let events = AsyncThrowingStream<Event, Error> { continuation in
+            let receiveTask = Task {
+                do {
+                    for try await envelope in transport.receive() {
+                        continuation.yield(.envelope(envelope))
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            let localChangeTask = Task {
+                for await _ in localChanges {
+                    continuation.yield(.localChange)
+                }
+            }
+            continuation.onTermination = { _ in
+                receiveTask.cancel()
+                localChangeTask.cancel()
+            }
+        }
+
+        for try await event in events {
+            switch event {
+            case .envelope(let envelope):
+                let responses = try await coordinator.handle(envelope)
+                await onCommitted?(envelope)
+                for response in responses {
+                    try await transport.send(response)
+                }
+            case .localChange:
+                for response in try await coordinator.nextOutgoing() {
+                    try await transport.send(response)
+                }
             }
         }
     }

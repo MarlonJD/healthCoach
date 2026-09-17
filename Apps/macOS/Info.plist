@@ -9,7 +9,7 @@
 	<key>CFBundlePackageType</key><string>APPL</string>
 	<key>CFBundleShortVersionString</key><string>1.0</string>
 	<key>CFBundleVersion</key><string>1</string>
-	<key>LSUIElement</key><true/>
+	<key>LSUIElement</key><false/>
 	<key>NSLocalNetworkUsageDescription</key><string>HealthCoach accepts connections only from the paired iPhone on the local network.</string>
 	<key>NSBonjourServices</key><array><string>_healthcoach._tcp</string></array>
 </dict>

@@ -11,6 +11,84 @@ import Darwin
 #endif
 
 final class HealthCoachKitTests: XCTestCase {
+    func testCodexOutputSchemaRequiresEveryDeclaredProperty() throws {
+        let schemaData = try HealthCoachOutputSchema.jobOutput()
+        let schema = try XCTUnwrap(JSONSerialization.jsonObject(with: schemaData) as? [String: Any])
+        try assertStrictSchemaObject(schema, at: "root")
+    }
+
+    func testSyncRunnerPushesDurableLocalChangesToAnOpenPeer() async throws {
+        let pairID = UUID()
+        let macID = UUID()
+        let phoneID = UUID()
+        let macStore = try HealthCoachStore(inMemory: true)
+        let phoneStore = try HealthCoachStore(inMemory: true)
+        try macStore.setActivePair(pairID)
+        try phoneStore.setActivePair(pairID)
+
+        let macCoordinator = SyncSessionCoordinator(
+            store: macStore,
+            pairID: pairID,
+            localPeerID: macID,
+            remotePeerID: phoneID,
+            localSender: .mac
+        )
+        let phoneCoordinator = SyncSessionCoordinator(
+            store: phoneStore,
+            pairID: pairID,
+            localPeerID: phoneID,
+            remotePeerID: macID,
+            localSender: .phone
+        )
+        let transport = RunnerTestTransport()
+        var localChangeContinuation: AsyncStream<Void>.Continuation?
+        let localChanges = AsyncStream<Void> { continuation in
+            localChangeContinuation = continuation
+        }
+        let runner = Task {
+            try await SyncConnectionRunner.run(
+                transport: transport,
+                coordinator: macCoordinator,
+                localChanges: localChanges
+            )
+        }
+        defer {
+            localChangeContinuation?.finish()
+            transport.finish()
+            runner.cancel()
+        }
+
+        try await waitForRunnerCondition("initial hello") { transport.sent().count == 1 }
+        transport.push(try await phoneCoordinator.hello())
+        try await waitForRunnerCondition("authentication response") { transport.sent().count >= 2 }
+
+        let meal = try macStore.saveMeal(
+            Meal(localDate: "2026-09-16", originalText: "synthetic push meal"),
+            enqueueAnalysis: false
+        )
+        let job = try macStore.createJob(
+            kind: .analyzeMeal,
+            request: JobRequest(mealID: meal.id),
+            inputRevision: meal.revision,
+            sourceRevision: meal.revision
+        )
+        try macStore.recordMacExecutionUpdate(JobExecutionUpdate(
+            jobID: job.id,
+            generation: job.requestGeneration,
+            sourceRevision: job.sourceRevision,
+            status: .running,
+            attempts: 1
+        ))
+        localChangeContinuation?.yield(())
+        try await waitForRunnerCondition("local outbox batch") { transport.sent().contains { $0.kind == .batch } }
+
+        let outgoingBatch = try XCTUnwrap(transport.sent().first(where: { $0.kind == .batch }))
+        let batch = try HealthCoachJSON.decode(SyncBatch.self, from: outgoingBatch.body)
+        XCTAssertEqual(batch.sender, .mac)
+        XCTAssertEqual(batch.mutations.count, 1)
+        XCTAssertEqual(batch.mutations.first?.entityType, .job)
+    }
+
     func testPersistentMealSurvivesRestartAndQueuesOnlyAfterCommit() throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
@@ -351,6 +429,30 @@ final class HealthCoachKitTests: XCTestCase {
         XCTAssertThrowsError(try decoder.append(Data([0, 0, 0, 0])))
     }
 
+    func testLengthPrefixedDecoderHandlesMultipleFramesAndArbitraryChunks() throws {
+        let bodies = [
+            Data("first synthetic frame".utf8),
+            Data(repeating: 0xA5, count: 257),
+            Data("last synthetic frame".utf8)
+        ]
+        let wire = try bodies.reduce(into: Data()) { partial, body in
+            partial.append(try LengthPrefixedFrameCodec.encode(body: body, maximumBodyBytes: 512))
+        }
+        var decoder = LengthPrefixedFrameDecoder(maximumBodyBytes: 512)
+        var decoded: [Data] = []
+        var offset = 0
+        let chunkSizes = [1, 3, 7, 2, 19, 5, 31]
+        var chunkIndex = 0
+        while offset < wire.count {
+            let end = min(offset + chunkSizes[chunkIndex % chunkSizes.count], wire.count)
+            decoded.append(contentsOf: try decoder.append(wire[offset..<end]))
+            offset = end
+            chunkIndex += 1
+        }
+        XCTAssertEqual(decoded, bodies)
+        XCTAssertTrue(decoder.remainder.isEmpty)
+    }
+
     func testOversizedMealRollsBackRecordJobAndOutboxTogether() throws {
         let store = try HealthCoachStore(inMemory: true)
         let text = String(repeating: "x", count: HealthCoachConstants.maximumFrameBytes)
@@ -582,6 +684,50 @@ final class HealthCoachKitTests: XCTestCase {
     #endif
 
     #if os(macOS)
+    func testCodexAppServerStartsWithCapturedSyntheticSnapshot() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let store = try HealthCoachStore(path: fixture.databaseURL)
+        try store.saveProfile(UserProfile(displayName: "Synthetic App Server user"))
+        let meal = try store.saveMeal(Meal(localDate: "2026-09-16", originalText: "synthetic meal"), enqueueAnalysis: false)
+        let job = try store.createJob(
+            kind: .analyzeMeal,
+            request: JobRequest(mealID: meal.id),
+            inputRevision: meal.revision,
+            sourceRevision: meal.revision
+        )
+        let artifact = try store.captureJobSnapshot(
+            for: job,
+            at: fixture.directoryURL.appendingPathComponent("app-server/context.sqlite")
+        )
+        guard let codex = CodexAppServerProbe.defaultExecutableURL() else {
+            throw HealthCoachError.unavailable("The installed Codex executable was not found.")
+        }
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let helperCandidates = [
+            URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".build/out/Products/Debug/healthcoach-mcp"),
+            repoRoot.appendingPathComponent(".build/out/Products/Debug/healthcoach-mcp")
+        ]
+        guard let helper = helperCandidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) else {
+            throw HealthCoachError.unavailable("The built healthcoach-mcp helper was not found.")
+        }
+        let client = CodexAppServerClient(configuration: CodexAppServerConfiguration(
+            executableURL: codex,
+            mcpExecutableURL: helper,
+            snapshotURL: artifact.path,
+            workingDirectory: fixture.directoryURL.appendingPathComponent("app-server")
+        ))
+        try await client.start()
+        let effectiveTools = await client.effectiveMCPTools()
+        XCTAssertEqual(Set(effectiveTools), HealthCoachMCPToolCatalog.nameSet)
+        await client.stop()
+    }
+
     func testMCPHelperInitializesListsToolsAndReadsOnlyFromSnapshot() throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
@@ -663,6 +809,94 @@ final class HealthCoachKitTests: XCTestCase {
         XCTAssertFalse(profileResult["isError"] as? Bool ?? true)
     }
     #endif
+}
+
+private func assertStrictSchemaObject(_ value: Any, at path: String) throws {
+    guard let object = value as? [String: Any] else {
+        if let array = value as? [Any] {
+            for (index, item) in array.enumerated() {
+                try assertStrictSchemaObject(item, at: "\(path)[\(index)]")
+            }
+        }
+        return
+    }
+
+    if let properties = object["properties"] as? [String: Any] {
+        let required = Set(try XCTUnwrap(object["required"] as? [String], "Missing required at \(path)"))
+        XCTAssertEqual(required, Set(properties.keys), "Strict schema properties mismatch at \(path)")
+        for (name, property) in properties {
+            try assertStrictSchemaObject(property, at: "\(path).\(name)")
+        }
+    }
+    if let items = object["items"] {
+        try assertStrictSchemaObject(items, at: "\(path).items")
+    }
+}
+
+private func waitForRunnerCondition(_ label: String, _ condition: @escaping @Sendable () -> Bool) async throws {
+    let deadline = Date().addingTimeInterval(3)
+    while Date() < deadline {
+        if condition() { return }
+        try await Task.sleep(nanoseconds: 10_000_000)
+    }
+    throw HealthCoachError.unavailable("The sync runner did not reach the expected synthetic state: \(label).")
+}
+
+private final class RunnerTestTransport: SyncByteTransport, @unchecked Sendable {
+    private let lock = NSLock()
+    private var receiveContinuation: AsyncThrowingStream<SyncEnvelope, Error>.Continuation?
+    private var pendingIncoming: [SyncEnvelope] = []
+    private var outgoing: [SyncEnvelope] = []
+
+    func send(_ envelope: SyncEnvelope) async throws {
+        recordOutgoing(envelope)
+    }
+
+    private func recordOutgoing(_ envelope: SyncEnvelope) {
+        lock.lock()
+        outgoing.append(envelope)
+        lock.unlock()
+    }
+
+    func receive() -> AsyncThrowingStream<SyncEnvelope, Error> {
+        AsyncThrowingStream { continuation in
+            lock.lock()
+            receiveContinuation = continuation
+            let pending = pendingIncoming
+            pendingIncoming.removeAll()
+            lock.unlock()
+            for envelope in pending {
+                continuation.yield(envelope)
+            }
+        }
+    }
+
+    func push(_ envelope: SyncEnvelope) {
+        lock.lock()
+        if let receiveContinuation {
+            receiveContinuation.yield(envelope)
+        } else {
+            pendingIncoming.append(envelope)
+        }
+        lock.unlock()
+    }
+
+    func sent() -> [SyncEnvelope] {
+        lock.lock()
+        defer { lock.unlock() }
+        return outgoing
+    }
+
+    func finish() {
+        lock.lock()
+        receiveContinuation?.finish()
+        receiveContinuation = nil
+        lock.unlock()
+    }
+
+    func close() async {
+        finish()
+    }
 }
 
 private func syntheticMealOutput(mealID: UUID, revision: Int, jobID: UUID) -> JobOutput {

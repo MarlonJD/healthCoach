@@ -33,9 +33,11 @@ public enum PairingCredentialFactory {
     public static func decodeQRPayload(_ data: Data, now: Date = Date()) throws -> PairingQRPayload {
         let payload = try HealthCoachJSON.decode(PairingQRPayload.self, from: data)
         guard payload.protocolVersion == HealthCoachConstants.protocolVersion,
-              payload.expiresAt > now,
               payload.credential.count == 32 else {
             throw HealthCoachError.revokedPair
+        }
+        guard payload.expiresAt > now else {
+            throw HealthCoachError.unavailable("This pairing QR has expired. Scan the current QR shown on the Mac.")
         }
         return payload
     }

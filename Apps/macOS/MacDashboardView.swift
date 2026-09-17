@@ -28,6 +28,12 @@ struct MacDashboardView: View {
                                 .font(.headline)
                             Text("Only a random credential, pair ID, and short expiry are encoded. Health data is not advertised in Bonjour.")
                                 .font(.footnote).foregroundStyle(.secondary)
+                            if let credential = model.pairingCredential, model.qrPayload != nil {
+                                Text("This QR refreshes automatically before it expires.")
+                                    .font(.footnote)
+                                Text("Current code expires \(credential.expiresAt.formatted(date: .omitted, time: .shortened))")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
                             Text(model.syncStatus).font(.footnote)
                             if model.qrPayload == nil { Button("Unpair and create new QR", role: .destructive) { model.unpair() } }
                         }

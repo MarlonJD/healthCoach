@@ -91,7 +91,12 @@ struct MealDetailView: View {
                 LabeledContent("Revision", value: "\(meal.revision)")
                 LabeledContent("Analysis", value: status)
                 if meal.analysisStatus == .queued || meal.analysisStatus == .running {
-                    Text("The paired Mac will process this when it can reach Codex.").font(.footnote).foregroundStyle(.secondary)
+                    Text("The paired Mac will process this when it can reach Codex. The iPhone checks for the result while the app is open.").font(.footnote).foregroundStyle(.secondary)
+                }
+                if let job = model.analysisJob(for: meal), let error = job.errorMessage {
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
                 }
                 Button("Request analysis again") { model.reanalyze(meal) }
             }

@@ -197,7 +197,7 @@ struct HealthCoachMCPMain {
         await server.withMethodHandler(CallTool.self) { params in
             try service.call(params)
         }
-        let transport = StdioTransport()
+        let transport = CompatibilityStdioTransport()
         try await server.start(transport: transport)
         await server.waitUntilCompleted()
     }

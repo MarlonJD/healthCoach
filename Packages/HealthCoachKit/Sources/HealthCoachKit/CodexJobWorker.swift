@@ -217,8 +217,14 @@ public actor CodexJobWorker {
 
     private func isTransient(_ error: Error) -> Bool {
         switch error {
-        case HealthCoachError.unavailable, HealthCoachError.protocolError:
+        case HealthCoachError.unavailable:
             return true
+        case HealthCoachError.protocolError(let message):
+            // A malformed transport, unavailable App Server, or interrupted
+            // turn can be retried. The API's schema rejection is deterministic
+            // for this job and must become a visible terminal error instead of
+            // retrying forever while the phone reports Queued.
+            return !message.localizedCaseInsensitiveContains("invalid_json_schema")
         default:
             return false
         }

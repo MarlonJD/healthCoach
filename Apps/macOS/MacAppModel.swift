@@ -3,6 +3,7 @@ import SwiftUI
 import HealthCoachKit
 import Network
 import ServiceManagement
+import AppKit
 
 @MainActor
 final class MacAppModel: ObservableObject {
@@ -12,7 +13,14 @@ final class MacAppModel: ObservableObject {
     private var listener: HealthCoachNetworkListener?
     private var worker: CodexJobWorker?
     private var workerTask: Task<Void, Never>?
+    private var workerRetryTask: Task<Void, Never>?
+    private var workerRetryAttempt = 0
+    private var pairingRefreshTask: Task<Void, Never>?
+    private var syncChangeContinuation: AsyncStream<Void>.Continuation?
     private var pendingCredential: PairingCredential?
+
+    private let pairingRenewalLeadTime: TimeInterval = 30
+    private let workerRetryDelays: [UInt64] = [5, 15, 30, 60, 60]
 
     @Published private(set) var pairingCredential: PairingCredential?
     @Published private(set) var qrPayload: Data?
@@ -50,6 +58,8 @@ final class MacAppModel: ObservableObject {
     deinit {
         listener?.stop()
         workerTask?.cancel()
+        workerRetryTask?.cancel()
+        pairingRefreshTask?.cancel()
     }
 
     func start() {
@@ -64,16 +74,18 @@ final class MacAppModel: ObservableObject {
             var shouldRunWorker = false
             if let pairID = store.activePairID, let credential = try pairingStore.load(pairID: pairID), credential.isUsable {
                 pairingCredential = credential
+                pendingCredential = nil
+                pairingRefreshTask?.cancel()
+                pairingRefreshTask = nil
                 startListener(credential: credential, showPairingQR: false)
                 syncStatus = "Paired; waiting for iPhone"
                 shouldRunWorker = true
             } else {
-                let credential = try PairingCredentialFactory.make(peerID: macPeerID)
-                pendingCredential = credential
-                pairingCredential = credential
-                qrPayload = try PairingCredentialFactory.makeQRPayload(from: credential)
-                startListener(credential: credential, showPairingQR: true)
-                syncStatus = "Scan the pairing QR with the iPhone"
+                if let pairID = store.activePairID {
+                    try? pairingStore.delete(pairID: pairID)
+                    try? store.setActivePair(nil)
+                }
+                try beginPairing()
             }
             refresh()
             if shouldRunWorker { runWorker() }
@@ -92,6 +104,13 @@ final class MacAppModel: ObservableObject {
     }
 
     func runWorker() {
+        workerRetryTask?.cancel()
+        workerRetryTask = nil
+        workerRetryAttempt = 0
+        startWorker()
+    }
+
+    private func startWorker() {
         guard workerTask == nil else { return }
         guard !analysisPaused else {
             syncStatus = "Analysis paused locally"
@@ -120,9 +139,48 @@ final class MacAppModel: ObservableObject {
                 self?.workerTask = nil
                 self?.refresh()
                 self?.lastSyncAt = Date()
-                self?.syncStatus = outcomes.isEmpty ? "No queued work" : "Codex work complete"
+                guard let self else { return }
+                self.signalSyncChange()
+                let queued = outcomes.filter { $0.status == .queued }
+                let failed = outcomes.filter { $0.status == .failed }
+                if let queuedError = queued.compactMap(\.message).first {
+                    self.lastError = queuedError
+                } else if let failedError = failed.compactMap(\.message).first {
+                    self.lastError = failedError
+                } else {
+                    self.lastError = nil
+                }
+                if !queued.isEmpty {
+                    self.syncStatus = "Codex unavailable; queued work retained"
+                    self.scheduleWorkerRetry()
+                } else if !failed.isEmpty {
+                    self.syncStatus = "Codex work failed; review the error"
+                } else {
+                    self.syncStatus = outcomes.isEmpty ? "No queued work" : "Codex work complete"
+                }
             }
         }
+    }
+
+    private func scheduleWorkerRetry() {
+        guard !analysisPaused, workerRetryTask == nil else { return }
+        let index = min(workerRetryAttempt, workerRetryDelays.count - 1)
+        let delay = workerRetryDelays[index]
+        workerRetryAttempt = min(workerRetryAttempt + 1, workerRetryDelays.count - 1)
+        workerRetryTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: delay * 1_000_000_000)
+            } catch {
+                return
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.workerRetryTask = nil
+            self.startWorker()
+        }
+    }
+
+    private func signalSyncChange() {
+        syncChangeContinuation?.yield(())
     }
 
     func toggleAnalysisPause() {
@@ -136,15 +194,51 @@ final class MacAppModel: ObservableObject {
             try store?.setActivePair(nil)
             listener?.stop()
             listener = nil
-            pairingCredential = nil
-            pendingCredential = nil
-            let credential = try PairingCredentialFactory.make(peerID: macPeerID)
-            pendingCredential = credential
-            pairingCredential = credential
-            qrPayload = try PairingCredentialFactory.makeQRPayload(from: credential)
-            startListener(credential: credential, showPairingQR: true)
+            try beginPairing()
             syncStatus = "Unpaired; scan the new QR"
         } catch { lastError = error.localizedDescription }
+    }
+
+    /// Creates the one-time QR credential and starts the listener that owns it.
+    /// Pending credentials are intentionally not persisted: if the companion
+    /// is restarted, a new QR is generated rather than reviving an old one.
+    private func beginPairing() throws {
+        listener?.stop()
+        listener = nil
+        let credential = try PairingCredentialFactory.make(peerID: macPeerID)
+        pendingCredential = credential
+        pairingCredential = credential
+        qrPayload = try PairingCredentialFactory.makeQRPayload(from: credential)
+        startListener(credential: credential, showPairingQR: true)
+        syncStatus = "Scan the pairing QR with the iPhone"
+        startPairingRefreshLoop()
+    }
+
+    private func startPairingRefreshLoop() {
+        pairingRefreshTask?.cancel()
+        pairingRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(nanoseconds: 5_000_000_000)
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                self?.refreshExpiredPairingIfNeeded()
+            }
+        }
+    }
+
+    private func refreshExpiredPairingIfNeeded() {
+        guard let credential = pendingCredential,
+              credential.expiresAt.timeIntervalSinceNow <= pairingRenewalLeadTime else { return }
+        do {
+            try beginPairing()
+            syncStatus = "QR refreshed; scan the new code"
+        } catch {
+            lastError = error.localizedDescription
+            syncStatus = "Pairing QR unavailable"
+        }
     }
 
     func helperURL() -> URL? {
@@ -178,17 +272,34 @@ final class MacAppModel: ObservableObject {
     private func handle(connection: HealthCoachNetworkConnection, credential: PairingCredential) async {
         guard let store else { await connection.close(); return }
         guard credential.isUsable else {
-            lastError = "The pairing QR credential has expired. Restart pairing to create a new QR."
+            if pendingCredential?.pairID == credential.pairID {
+                refreshExpiredPairingIfNeeded()
+            }
             await connection.close()
             return
         }
         do {
             let coordinator = SyncSessionCoordinator(store: store, pairID: credential.pairID, localPeerID: macPeerID, remotePeerID: nil, localSender: .mac)
-            try await SyncConnectionRunner.run(transport: connection, coordinator: coordinator) { @MainActor [weak self] envelope in
+            var localChangeContinuation: AsyncStream<Void>.Continuation?
+            let localChanges = AsyncStream<Void> { continuation in
+                localChangeContinuation = continuation
+            }
+            syncChangeContinuation = localChangeContinuation
+            defer {
+                localChangeContinuation?.finish()
+                syncChangeContinuation = nil
+            }
+            try await SyncConnectionRunner.run(transport: connection, coordinator: coordinator, onCommitted: { @MainActor [weak self] envelope in
                 guard envelope.kind == .batch else { return }
                 self?.handleCommittedPhoneBatch()
-            }
+            }, localChanges: localChanges)
             if await coordinator.isAuthenticated() {
+                // A pending QR may have rotated while this connection was in
+                // flight. Never activate an older credential after rotation.
+                guard pendingCredential?.pairID == credential.pairID else {
+                    await connection.close()
+                    return
+                }
                 // Keep a QR credential pending until both peers complete the
                 // authenticated exchange. Only then bind this mirror to the
                 // pair and retain the credential for automatic reconnect.
@@ -197,6 +308,8 @@ final class MacAppModel: ObservableObject {
                 try pairingStore.save(activatedCredential)
                 pairingCredential = activatedCredential
                 pendingCredential = nil
+                pairingRefreshTask?.cancel()
+                pairingRefreshTask = nil
                 qrPayload = nil
                 syncStatus = "Paired and synced"
                 lastSyncAt = Date()
@@ -235,10 +348,12 @@ final class MacAppModel: ObservableObject {
 
 struct MacMenuView: View {
     @ObservedObject var model: MacAppModel
-    @Environment(\.openWindow) private var openWindow
+    @ObservedObject var dashboardWindow: MacDashboardWindowController
 
     var body: some View {
-        Button("Open HealthCoach") { openWindow(id: "dashboard") }
+        Button("Open HealthCoach") {
+            dashboardWindow.show(model: model)
+        }
         Text(model.syncStatus)
         Text("Codex: \(model.codexStatus.readiness.rawValue)")
         Divider()
