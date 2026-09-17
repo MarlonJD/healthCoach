@@ -1,0 +1,30 @@
+{
+  "schema_version": 2,
+  "claim": "harness-ready",
+  "profile": "governed",
+  "repository_commit": "<replace-with-source-commit-before-attestation-overlay>",
+  "repository_identity": "<replace-with-provider-scoped-immutable-repository-id>",
+  "deployment_target_id": "<replace-with-stable-harness-evaluation-target-id>",
+  "environment": "<replace-with-repository-ci-staging-or-production-scope>",
+  "issued_at": "<replace-with-UTC-RFC3339-instant>",
+  "expires_at": "<replace-with-UTC-RFC3339-instant>",
+  "coverage_sha256": "<replace-with-coverage-matrix-sha256>",
+  "evidence_root": "docs/agent-harness/evidence",
+  "project_native_gate": {
+    "command": "<replace-with-project-native-command>",
+    "evidence": "docs/agent-harness/evidence/project-native-gate.json"
+  },
+  "maintenance": {
+    "command": "<replace-with-project-native-maintenance-command>",
+    "triggers": [
+      "manual"
+    ],
+    "max_age_hours": 168,
+    "evidence": "docs/agent-harness/evidence/continuous-maintenance.json"
+  },
+  "production_authority": {
+    "owner": null,
+    "approval_evidence": null,
+    "rollback_evidence": null
+  }
+}

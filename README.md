@@ -87,6 +87,15 @@ The Watch declares HealthKit permission text and `WKBackgroundModes = workout-pr
 
 ## Further documentation
 
+- [`AGENTS.md`](AGENTS.md) provides the repository's concise agent workflow, anti-overengineering rules, and proportional verification guidance.
 - [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) is the complete reviewed implementation contract.
 - [`docs/PLAN_REVIEW.md`](docs/PLAN_REVIEW.md) records the independent review and Watch amendment disposition.
 - [`docs/VERIFICATION.md`](docs/VERIFICATION.md) separates `verified locally`, `not run`, and `blocked` evidence, including physical-device and signing limitations.
+
+## Repository-local harness skill
+
+[`apply-harness-engineering`](.agents/skills/apply-harness-engineering/SKILL.md) is vendored unchanged from [MarlonJD/harness-engineering-skill v0.2.1](https://github.com/MarlonJD/harness-engineering-skill/releases/tag/v0.2.1), commit `59d28d2ed88d86dc8e0194a031deabbb3f4178d6`, under `vendor/apply-harness-engineering/`. A relative symlink at `.agents/skills/apply-harness-engineering` makes it discoverable through [Codex's supported local skill paths](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills). This keeps upstream templates outside the helper's project-document scan. Keep repository-specific policy in `AGENTS.md` rather than editing the upstream package.
+
+The repository uses the MVP workflow and adaptive checks. Governed templates and certification are inactive unless explicitly requested. Invoke the skill for a harness task with `$apply-harness-engineering audit .` or `$apply-harness-engineering simplify .`; `AGENTS.md` is sufficient for ordinary feature work. The helper commands in that guide are read-only and do not replace Swift tests or Xcode builds.
+
+When updating the vendored package, run its development test suite in a standalone checkout of the pinned upstream commit; one upstream test requires the package to have its own Git root. Check the installed package directly with `python3 -B .agents/skills/apply-harness-engineering/scripts/harness.py check --root vendor/apply-harness-engineering --allow-non-git`.

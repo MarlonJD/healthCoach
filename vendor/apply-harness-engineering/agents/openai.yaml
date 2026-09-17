@@ -1,0 +1,6 @@
+interface:
+  display_name: "Apply Harness Engineering"
+  short_description: "Minimal agent-ready repository harness"
+  default_prompt: "Use $apply-harness-engineering for the named repository to make it agent-discoverable and verifiable with the smallest durable change; prefer reuse, consolidation, and deletion, and use governed or certification paths only when explicitly requested."
+policy:
+  allow_implicit_invocation: false
